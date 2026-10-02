@@ -30,7 +30,10 @@ The repository is also a plugin marketplace (`.github/plugin/marketplace.json`).
 
 - **VS Code (Windows):** enable `chat.plugins.enabled`, add `jonathan-vella/apex-plugin` to
   `chat.plugins.marketplaces`, then run **Chat: Plugins** and install `apex-spike`. A plugin installed
-  with the Copilot CLI on the same machine is also picked up by VS Code.
+  with the Copilot CLI on the same machine is also picked up by VS Code. Install through **one**
+  channel only: two copies of `apex-spike` register duplicate MCP server names, and VS Code then
+  fails to start them (`MCP server "apex-spike" has no installed config to restart`). Run VS Code
+  locally, not in WSL or a dev container, for the `vscode-windows` label.
 - **GitHub Copilot app (Windows):** **Customize** → **Plugins** → marketplace settings (gear icon) →
   add `jonathan-vella/apex-plugin` → install `apex-spike`.
 

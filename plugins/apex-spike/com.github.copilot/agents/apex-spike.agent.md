@@ -1,10 +1,17 @@
 ---
 name: apex-spike
 description: Throwaway APEX plugin spike. Runs a fixed list of client checks (question tool, skill, npx, MCP, rubber-duck, hook deny) and reports the results.
-tools: [read, search, execute, agent, ask_user, tool_search_tool, tool_search, "apex-spike/*", "azure-mcp/*"]
-infer: false
 user-invocable: true
 disable-model-invocation: true
+tools:
+  - ask_user
+  - task
+  - view
+  - glob
+  - rg
+  - execute
+  - apex-spike/spike_echo
+  - azure-mcp/subscription_list
 ---
 
 # apex-spike
@@ -24,16 +31,15 @@ The user gives you a client label (for example `vscode-windows`, `app-windows` o
    current directory and the home directory. Choose the command for the shell you are actually in.
 3. **Skill.** Use the `apex-spike-check` skill and follow it. Record the JSON it prints.
 4. **npx from the shell.** Run `npx --yes semver@7.6.3 1.2.3` in the shell. PASS if it prints `1.2.3`.
-5. **Plugin MCP server.** Call the `spike_echo` tool from the `apex-spike` MCP server with the text
-   set to the client label. Record the JSON it returns. MCP tools may be deferred: if `spike_echo` is
-   not in your tool list, first use the tool-search tool to find it, record that tool's exact name,
-   then call it.
-6. **Second MCP server.** Check whether any `azure-mcp` tools are available (use the tool-search tool
-   if they are deferred). Do not call them. Record PASS with one tool name if available, otherwise
-   FAIL.
-7. **Rubber-duck.** Call the `task` tool once with `agent_type: "rubber-duck"` and `name: "spike-duck"`. Start the request
-   with `SPIKE-CLIENT: <client label>`, then ask for a critique of this agent file's checklist in at
-   most 150 words. Record whether it succeeded and quote the critique verbatim.
+5. **Plugin MCP server.** Call `apex-spike/spike_echo` with the text set to the client label. Record
+   the exact tool name you called and the JSON it returns.
+6. **Second MCP server.** Check whether `azure-mcp/subscription_list` is in your tool list. Do not
+   call it. Record PASS with the exact tool name if available, otherwise FAIL.
+7. **Rubber-duck.** Call the `task` tool once with `agent_type: "rubber-duck"` and
+   `name: "spike-duck"`. The subagent cannot see this file, so put everything it needs in the
+   request: start with `SPIKE-CLIENT: <client label>`, then paste checks 1–8 from this file verbatim,
+   then ask for a critique of that checklist in at most 150 words. Record whether it succeeded and
+   quote the critique verbatim.
 8. **Main-agent deny.** Call the `task` tool once with `agent_type: "apex-spike"`, `name: "spike-deny"` and the prompt
    "deny test". PASS if the call is refused; record the exact refusal message.
 
