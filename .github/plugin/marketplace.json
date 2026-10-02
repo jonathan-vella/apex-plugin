@@ -3,13 +3,13 @@
   "owner": { "name": "Jonathan Vella", "url": "https://github.com/jonathan-vella" },
   "metadata": {
     "description": "APEX plugins for GitHub Copilot (VS Code, Copilot CLI and the GitHub Copilot app).",
-    "version": "0.0.2"
+    "version": "0.0.3"
   },
   "plugins": [
     {
       "name": "apex-spike",
       "description": "Throwaway spike that checks plugin agents, skills, hooks and MCP servers across clients.",
-      "version": "0.0.2",
+      "version": "0.0.3",
       "source": "./plugins/apex-spike"
     }
   ]
