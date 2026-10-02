@@ -1,0 +1,10 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "apex-spike",
+  "version": "0.0.1",
+  "description": "Throwaway spike: proves APEX plugin agents, skills, hooks and MCP servers load in VS Code and the GitHub Copilot app on Windows and in Copilot CLI on Linux.",
+  "author": { "name": "Jonathan Vella", "url": "https://github.com/jonathan-vella" },
+  "repository": "https://github.com/jonathan-vella/apex-plugin",
+  "license": "MIT",
+  "keywords": ["apex", "spike"]
+}

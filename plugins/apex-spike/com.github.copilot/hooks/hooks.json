@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "p=\"\"; for r in \"$PLUGIN_ROOT\" \"$COPILOT_PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" \".\"; do if [ -n \"$r\" ] && [ -f \"$r/com.github.copilot/hooks/hook.mjs\" ]; then p=\"$r/com.github.copilot/hooks/hook.mjs\"; break; fi; done; if [ -n \"$p\" ]; then node \"$p\" preToolUse; else mkdir -p \"$HOME/.apex-plugin-spike/logs\"; { date -u; pwd; env | grep -iE 'plugin|copilot|claude'; } >> \"$HOME/.apex-plugin-spike/logs/unresolved-preToolUse.log\"; cat > /dev/null; fi; exit 0",
+        "powershell": "$p = $null; foreach ($r in @($env:PLUGIN_ROOT, $env:COPILOT_PLUGIN_ROOT, $env:CLAUDE_PLUGIN_ROOT, '.')) { if ($r -and (Test-Path (Join-Path $r 'com.github.copilot/hooks/hook.mjs'))) { $p = Join-Path $r 'com.github.copilot/hooks/hook.mjs'; break } }; $in = [Console]::In.ReadToEnd(); if ($p) { $in | node $p preToolUse } else { $d = Join-Path $HOME '.apex-plugin-spike/logs'; New-Item -ItemType Directory -Force $d | Out-Null; ((Get-Date -Format o) + ' ' + (Get-Location) + ' ' + ((Get-ChildItem env: | Where-Object Name -match 'PLUGIN|COPILOT|CLAUDE' | ForEach-Object { $_.Name + '=' + $_.Value }) -join ';')) | Add-Content (Join-Path $d 'unresolved-preToolUse.log') }; exit 0",
+        "timeoutSec": 15
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "p=\"\"; for r in \"$PLUGIN_ROOT\" \"$COPILOT_PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" \".\"; do if [ -n \"$r\" ] && [ -f \"$r/com.github.copilot/hooks/hook.mjs\" ]; then p=\"$r/com.github.copilot/hooks/hook.mjs\"; break; fi; done; if [ -n \"$p\" ]; then node \"$p\" postToolUse; else mkdir -p \"$HOME/.apex-plugin-spike/logs\"; { date -u; pwd; env | grep -iE 'plugin|copilot|claude'; } >> \"$HOME/.apex-plugin-spike/logs/unresolved-postToolUse.log\"; cat > /dev/null; fi; exit 0",
+        "powershell": "$p = $null; foreach ($r in @($env:PLUGIN_ROOT, $env:COPILOT_PLUGIN_ROOT, $env:CLAUDE_PLUGIN_ROOT, '.')) { if ($r -and (Test-Path (Join-Path $r 'com.github.copilot/hooks/hook.mjs'))) { $p = Join-Path $r 'com.github.copilot/hooks/hook.mjs'; break } }; $in = [Console]::In.ReadToEnd(); if ($p) { $in | node $p postToolUse } else { $d = Join-Path $HOME '.apex-plugin-spike/logs'; New-Item -ItemType Directory -Force $d | Out-Null; ((Get-Date -Format o) + ' ' + (Get-Location) + ' ' + ((Get-ChildItem env: | Where-Object Name -match 'PLUGIN|COPILOT|CLAUDE' | ForEach-Object { $_.Name + '=' + $_.Value }) -join ';')) | Add-Content (Join-Path $d 'unresolved-postToolUse.log') }; exit 0",
+        "timeoutSec": 15
+      }
+    ],
+    "subagentStart": [
+      {
+        "type": "command",
+        "bash": "p=\"\"; for r in \"$PLUGIN_ROOT\" \"$COPILOT_PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" \".\"; do if [ -n \"$r\" ] && [ -f \"$r/com.github.copilot/hooks/hook.mjs\" ]; then p=\"$r/com.github.copilot/hooks/hook.mjs\"; break; fi; done; if [ -n \"$p\" ]; then node \"$p\" subagentStart; else mkdir -p \"$HOME/.apex-plugin-spike/logs\"; { date -u; pwd; env | grep -iE 'plugin|copilot|claude'; } >> \"$HOME/.apex-plugin-spike/logs/unresolved-subagentStart.log\"; cat > /dev/null; fi; exit 0",
+        "powershell": "$p = $null; foreach ($r in @($env:PLUGIN_ROOT, $env:COPILOT_PLUGIN_ROOT, $env:CLAUDE_PLUGIN_ROOT, '.')) { if ($r -and (Test-Path (Join-Path $r 'com.github.copilot/hooks/hook.mjs'))) { $p = Join-Path $r 'com.github.copilot/hooks/hook.mjs'; break } }; $in = [Console]::In.ReadToEnd(); if ($p) { $in | node $p subagentStart } else { $d = Join-Path $HOME '.apex-plugin-spike/logs'; New-Item -ItemType Directory -Force $d | Out-Null; ((Get-Date -Format o) + ' ' + (Get-Location) + ' ' + ((Get-ChildItem env: | Where-Object Name -match 'PLUGIN|COPILOT|CLAUDE' | ForEach-Object { $_.Name + '=' + $_.Value }) -join ';')) | Add-Content (Join-Path $d 'unresolved-subagentStart.log') }; exit 0",
+        "timeoutSec": 15
+      }
+    ],
+    "subagentStop": [
+      {
+        "type": "command",
+        "bash": "p=\"\"; for r in \"$PLUGIN_ROOT\" \"$COPILOT_PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" \".\"; do if [ -n \"$r\" ] && [ -f \"$r/com.github.copilot/hooks/hook.mjs\" ]; then p=\"$r/com.github.copilot/hooks/hook.mjs\"; break; fi; done; if [ -n \"$p\" ]; then node \"$p\" subagentStop; else mkdir -p \"$HOME/.apex-plugin-spike/logs\"; { date -u; pwd; env | grep -iE 'plugin|copilot|claude'; } >> \"$HOME/.apex-plugin-spike/logs/unresolved-subagentStop.log\"; cat > /dev/null; fi; exit 0",
+        "powershell": "$p = $null; foreach ($r in @($env:PLUGIN_ROOT, $env:COPILOT_PLUGIN_ROOT, $env:CLAUDE_PLUGIN_ROOT, '.')) { if ($r -and (Test-Path (Join-Path $r 'com.github.copilot/hooks/hook.mjs'))) { $p = Join-Path $r 'com.github.copilot/hooks/hook.mjs'; break } }; $in = [Console]::In.ReadToEnd(); if ($p) { $in | node $p subagentStop } else { $d = Join-Path $HOME '.apex-plugin-spike/logs'; New-Item -ItemType Directory -Force $d | Out-Null; ((Get-Date -Format o) + ' ' + (Get-Location) + ' ' + ((Get-ChildItem env: | Where-Object Name -match 'PLUGIN|COPILOT|CLAUDE' | ForEach-Object { $_.Name + '=' + $_.Value }) -join ';')) | Add-Content (Join-Path $d 'unresolved-subagentStop.log') }; exit 0",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}
