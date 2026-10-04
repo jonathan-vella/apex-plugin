@@ -59,7 +59,7 @@ The repository is also a plugin marketplace (`.github/plugin/marketplace.json`).
 .github/plugin/marketplace.json        marketplace listing
 plugins/apex-spike/
   plugin.json                          Agent Plugins 1.0 manifest
-  mcp.json                             bundled Node MCP server + azure-mcp via npx
+  mcp.json                             bundled Node MCP server + apex-spike-azure (azure-mcp via npx)
   mcp/server.mjs                       dependency-free MCP server
   skills/apex-spike-check/             skill that runs a bundled Node script
   com.github.copilot/agents/           the apex-spike agent

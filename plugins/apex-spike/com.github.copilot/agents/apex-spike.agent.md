@@ -11,7 +11,7 @@ tools:
   - rg
   - execute
   - apex-spike/spike_echo
-  - azure-mcp/subscription_list
+  - apex-spike-azure/subscription_list
 ---
 
 # apex-spike
@@ -31,10 +31,11 @@ The user gives you a client label (for example `vscode-windows`, `app-windows` o
    current directory and the home directory. Choose the command for the shell you are actually in.
 3. **Skill.** Use the `apex-spike-check` skill and follow it. Record the JSON it prints.
 4. **npx from the shell.** Run `npx --yes semver@7.6.3 1.2.3` in the shell. PASS if it prints `1.2.3`.
-5. **Plugin MCP server.** Call `apex-spike/spike_echo` with the text set to the client label. Record
-   the exact tool name you called and the JSON it returns.
-6. **Second MCP server.** Check whether `azure-mcp/subscription_list` is in your tool list. Do not
-   call it. Record PASS with the exact tool name if available, otherwise FAIL.
+5. **Plugin MCP server.** Call `apex-spike/spike_echo` with the text set to the client label. Clients may
+   expose it as `apex-spike-spike_echo`. Record the exact tool name you called and the JSON it returns.
+6. **Second MCP server.** Check whether `apex-spike-azure/subscription_list` (or
+   `apex-spike-azure-subscription_list`) is in your tool list. Do not call it. Record PASS with the exact tool
+   name if available, otherwise FAIL.
 7. **Rubber-duck.** Call the `task` tool once with `agent_type: "rubber-duck"` and
    `name: "spike-duck"`. The subagent cannot see this file, so put everything it needs in the
    request: start with `SPIKE-CLIENT: <client label>`, then paste checks 1–8 from this file verbatim,
