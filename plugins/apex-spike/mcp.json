@@ -6,7 +6,7 @@
       "command": "node",
       "args": ["${PLUGIN_ROOT}/mcp/server.mjs"]
     },
-    "azure-mcp": {
+    "apex-spike-azure": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@azure/mcp@2.0.5", "server", "start"]
