@@ -8,6 +8,7 @@ user-invocable: true
 disable-model-invocation: true
 tools:
   [
+    ask_user,
     vscode/askQuestions,
     execute,
     read,
@@ -34,6 +35,9 @@ Standalone review entry point that runs adversarial review over a single
 artifact, records or reports structured findings, then runs the shared **Per-Finding
 Decision Protocol** so the user can Apply selected fixes and hand off
 to the next step in one turn.
+
+Question tool: `ask_user` in Copilot clients (CLI, app, VS Code Copilot harness), `askQuestions` in the
+VS Code Local harness. Instructions naming `askQuestions` or `vscode_askQuestions` mean whichever is available.
 
 For gated artifacts, run `apex/reviewRequest` → `rubber-duck` →
 `apex/recordReview`, then present the recorded findings. For ungated artifacts,

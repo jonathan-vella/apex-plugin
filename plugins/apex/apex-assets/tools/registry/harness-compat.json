@@ -165,12 +165,19 @@
       "cloud_alias": "todo",
       "verification": "listed"
     },
-    "vscode/askQuestions": {
+    "ask_user": {
       "support": "mapped",
       "sdk": ["ask_user"],
       "cloud_alias": null,
       "verification": "exercised",
-      "note": "Cloud agent cannot ask the user mid-task; checkpoint and stop instead."
+      "note": "Copilot runtime question tool (spike check 1 passed in all three clients). Cloud agent cannot ask mid-task; checkpoint and stop instead."
+    },
+    "vscode/askQuestions": {
+      "support": "unsupported",
+      "sdk": [],
+      "cloud_alias": null,
+      "verification": "exercised",
+      "note": "VS Code Local harness only. Copilot runtimes ignore this name and do not map it to ask_user (microsoft/vscode#314010); list ask_user as well."
     },
     "web": {
       "support": "mapped",
