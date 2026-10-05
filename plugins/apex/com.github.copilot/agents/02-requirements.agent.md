@@ -9,6 +9,7 @@ disable-model-invocation: true
 agents: []
 tools:
   [
+    ask_user,
     vscode/askQuestions,
     execute,
     read,
@@ -65,6 +66,9 @@ Capture Step 1 intent and user constraints, not architecture decisions, through 
 questioning; generate the Step 1 artifacts, run the mandatory challenger review, and hand off to
 Governance (governance-first) or Architecture (legacy) only after Gate 1. Complete discovery, artifacts,
 independent review and Gate 1 in one turn when required tools and user answers are available; blockers override this cadence.
+
+Question tool: `ask_user` in Copilot clients (CLI, app, VS Code Copilot harness), `askQuestions` in the
+VS Code Local harness. Instructions naming `askQuestions` or `vscode_askQuestions` mean whichever is available.
 
 Done when:
 

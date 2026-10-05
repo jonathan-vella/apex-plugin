@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "APEX plugins for GitHub Copilot (VS Code, Copilot CLI and the GitHub Copilot app).",
-    "version": "0.10.0"
+    "version": "0.10.1"
   },
   "plugins": [
     {
@@ -18,7 +18,7 @@
     {
       "name": "apex",
       "description": "APEX: Azure platform engineering agents that take a project from requirements through architecture, governance, IaC and deployment, with review gates and tracked progress.",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "source": "./plugins/apex"
     }
   ]

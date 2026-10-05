@@ -9,6 +9,7 @@ disable-model-invocation: true
 agents: []
 tools:
   [
+    ask_user,
     vscode/askQuestions,
     execute,
     read,
@@ -39,7 +40,7 @@ handoffs:
     send: true
   - label: "Step 1: Gather Requirements"
     agent: 02-Requirements
-    prompt: "For a new project, begin Phase 1 Round 1 with askQuestions and complete the required questioning phases before generating artifacts. The Requirements agent's session-state exception applies: on resume or refinement, recover recorded answers, ask only for missing or changed information, and preserve existing work. Input: user requirements and saved project context via apex/status. Output: agent-output/{project}/01-requirements.md with required review and approval."
+    prompt: "For a new project, begin Phase 1 Round 1 with the question tool and complete the required questioning phases before generating artifacts. The Requirements agent's session-state exception applies: on resume or refinement, recover recorded answers, ask only for missing or changed information, and preserve existing work. Input: user requirements and saved project context via apex/status. Output: agent-output/{project}/01-requirements.md with required review and approval."
     send: true
   - label: "Step 2: Architecture Assessment"
     agent: 03-Architect
@@ -97,6 +98,9 @@ handoffs:
 
 Role: Master orchestrator that drives the multi-step Azure platform engineering workflow
 end-to-end with mandatory human approval gates.
+
+Question tool: `ask_user` in Copilot clients (CLI, app, VS Code Copilot harness), `askQuestions` in the
+VS Code Local harness. Instructions naming `askQuestions` or `vscode_askQuestions` mean whichever is available.
 
 ## Personality
 
