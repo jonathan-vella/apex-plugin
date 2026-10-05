@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "hooks": {
+    "preToolUse": [
+      {
+        "type": "command",
+        "bash": "p=\"\"; for r in \"$PLUGIN_ROOT\" \"$COPILOT_PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" \".\"; do if [ -n \"$r\" ] && [ -f \"$r/com.github.copilot/hooks/apex-hook.mjs\" ]; then p=\"$r/com.github.copilot/hooks/apex-hook.mjs\"; break; fi; done; if [ -n \"$p\" ]; then exec node \"$p\" preToolUse; fi; cat > /dev/null; echo \"APEX hooks: plugin folder not found; reinstall the APEX plugin.\" >&2; exit 0",
+        "powershell": "$p = $null; foreach ($r in @($env:PLUGIN_ROOT, $env:COPILOT_PLUGIN_ROOT, $env:CLAUDE_PLUGIN_ROOT, '.')) { if ($r) { $c = [System.IO.Path]::Combine($r, 'com.github.copilot/hooks/apex-hook.mjs'); if ([System.IO.File]::Exists($c)) { $p = $c; break } } }; $in = [Console]::In.ReadToEnd(); if ($p) { $in | node $p preToolUse; exit $LASTEXITCODE }; [Console]::Error.WriteLine('APEX hooks: plugin folder not found; reinstall the APEX plugin.'); exit 0",
+        "timeoutSec": 15
+      }
+    ],
+    "postToolUse": [
+      {
+        "type": "command",
+        "bash": "p=\"\"; for r in \"$PLUGIN_ROOT\" \"$COPILOT_PLUGIN_ROOT\" \"$CLAUDE_PLUGIN_ROOT\" \".\"; do if [ -n \"$r\" ] && [ -f \"$r/com.github.copilot/hooks/apex-hook.mjs\" ]; then p=\"$r/com.github.copilot/hooks/apex-hook.mjs\"; break; fi; done; if [ -n \"$p\" ]; then exec node \"$p\" postToolUse; fi; cat > /dev/null; echo \"APEX hooks: plugin folder not found; reinstall the APEX plugin.\" >&2; exit 0",
+        "powershell": "$p = $null; foreach ($r in @($env:PLUGIN_ROOT, $env:COPILOT_PLUGIN_ROOT, $env:CLAUDE_PLUGIN_ROOT, '.')) { if ($r) { $c = [System.IO.Path]::Combine($r, 'com.github.copilot/hooks/apex-hook.mjs'); if ([System.IO.File]::Exists($c)) { $p = $c; break } } }; $in = [Console]::In.ReadToEnd(); if ($p) { $in | node $p postToolUse; exit $LASTEXITCODE }; [Console]::Error.WriteLine('APEX hooks: plugin folder not found; reinstall the APEX plugin.'); exit 0",
+        "timeoutSec": 15
+      }
+    ]
+  }
+}
