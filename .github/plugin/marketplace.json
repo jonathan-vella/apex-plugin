@@ -1,9 +1,12 @@
 {
   "name": "apex",
-  "owner": { "name": "Jonathan Vella", "url": "https://github.com/jonathan-vella" },
+  "owner": {
+    "name": "Jonathan Vella",
+    "url": "https://github.com/jonathan-vella"
+  },
   "metadata": {
     "description": "APEX plugins for GitHub Copilot (VS Code, Copilot CLI and the GitHub Copilot app).",
-    "version": "0.0.4"
+    "version": "0.10.0"
   },
   "plugins": [
     {
@@ -11,6 +14,12 @@
       "description": "Throwaway spike that checks plugin agents, skills, hooks and MCP servers across clients.",
       "version": "0.0.4",
       "source": "./plugins/apex-spike"
+    },
+    {
+      "name": "apex",
+      "description": "APEX: Azure platform engineering agents that take a project from requirements through architecture, governance, IaC and deployment, with review gates and tracked progress.",
+      "version": "0.10.0",
+      "source": "./plugins/apex"
     }
   ]
 }

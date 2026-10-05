@@ -1,0 +1,19 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "apex",
+  "version": "0.10.0",
+  "description": "APEX: Azure platform engineering agents that take a project from requirements through architecture, governance, IaC and deployment, with review gates and tracked progress.",
+  "author": {
+    "name": "Jonathan Vella",
+    "url": "https://github.com/jonathan-vella"
+  },
+  "repository": "https://github.com/jonathan-vella/apex-plugin",
+  "license": "MIT",
+  "keywords": [
+    "apex",
+    "azure",
+    "bicep",
+    "terraform",
+    "infrastructure-as-code"
+  ]
+}

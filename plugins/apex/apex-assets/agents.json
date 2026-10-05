@@ -1,0 +1,946 @@
+{
+  "agents": [
+    {
+      "path": ".github/agents/01-orchestrator.agent.md",
+      "frontmatter": {
+        "name": "01-Orchestrator",
+        "description": "Master orchestrator for the multi-step Azure platform engineering workflow. Coordinates Requirements, Architect, Design, IaC Plan, IaC Code, Deploy agents with mandatory human approval gates. Routes Bicep or Terraform tracks via decisions.iac_tool.",
+        "model": [
+          "MAI-Code-1.1-Flash"
+        ],
+        "reasoning-effort": "medium",
+        "argument-hint": "Describe the Azure platform engineering project you want to build end-to-end",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "edit",
+          "search",
+          "todo",
+          "apex/status",
+          "apex/init",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/transition",
+          "apex/handoff"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Start New Project",
+            "agent": "01-Orchestrator",
+            "prompt": "Begin the multi-step workflow for a new Azure platform engineering project. Start by gathering requirements. Input: user project description. Output: project state initialized by apex/init under agent-output/{project}/.",
+            "send": false
+          },
+          {
+            "label": "▶ Resume Workflow",
+            "agent": "01-Orchestrator",
+            "prompt": "Resume using Resuming a Project in this agent body. Input: supplied project name, or project selection when absent. Output: recovered status and the applicable approval gate or handoff, preserving required reviews and approvals.",
+            "send": false
+          },
+          {
+            "label": "▶ Review Artifacts",
+            "agent": "01-Orchestrator",
+            "prompt": "Review all generated artifacts in the agent-output folder and provide a summary of current project state. Input: all files under agent-output/{project}/. Output: summary report of current project state (chat only).",
+            "send": true
+          },
+          {
+            "label": "Step 1: Gather Requirements",
+            "agent": "02-Requirements",
+            "prompt": "For a new project, begin Phase 1 Round 1 with askQuestions and complete the required questioning phases before generating artifacts. The Requirements agent's session-state exception applies: on resume or refinement, recover recorded answers, ask only for missing or changed information, and preserve existing work. Input: user requirements and saved project context via apex/status. Output: agent-output/{project}/01-requirements.md with required review and approval.",
+            "send": true
+          },
+          {
+            "label": "Step 2: Architecture Assessment",
+            "agent": "03-Architect",
+            "prompt": "Create a WAF assessment with cost estimates. Input: `01-requirements.md` plus `04-governance-constraints.json`. Output: `02-architecture-assessment.md`, `02-policy-map.json`, and `03-des-cost-estimate.md`.",
+            "send": true
+          },
+          {
+            "label": "Step 3: Design Artifacts",
+            "agent": "04-Design",
+            "prompt": "Generate Python architecture diagrams and ADRs based on the architecture assessment in `agent-output/{project}/02-architecture-assessment.md`. The 04-Design agent will ask which scope to produce (diagrams, ADRs, or both). This step is optional; the graph decides whether the next owner is IaC Plan.",
+            "send": true
+          },
+          {
+            "label": "Step 3.5: Governance Discovery",
+            "agent": "04g-Governance",
+            "prompt": "Discover Azure Policy constraints for `agent-output/{project}/`. Input: approved requirements plus subscription if available. Output: `04-governance-constraints.md/.json`, `governance_baseline`, and the Architecture handoff. Governance has no review gate.",
+            "send": true
+          },
+          {
+            "label": "Step 4: IaC Plan (Bicep)",
+            "agent": "05-IaC Planner",
+            "prompt": "Create a Bicep implementation plan. Input: `02-architecture-assessment.md`, live `04-governance-constraints.md/.json`, and `governance_baseline=live`; if the baseline is `reference` or unset, return to `04g-Governance` for Refresh Governance. Output: `04-implementation-plan.md` plus dependency/runtime diagrams. Set decisions.iac_tool to Bicep.",
+            "send": true
+          },
+          {
+            "label": "Step 5: Generate Bicep",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: decisions.iac_tool=Bicep and `agent-output/{project}/04-implementation-plan.md`. Implement the Bicep templates under `infra/bicep/{project}/`. Output: selected-track infra, validation evidence, and `05-iac-handoff.json`.",
+            "send": true
+          },
+          {
+            "label": "Step 6: Deploy (Bicep)",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: decisions.iac_tool=Bicep, validated `infra/bicep/{project}/`, and `05-iac-handoff.json`. Deploy after preview and approval. Output: `06-deployment-summary.md`.",
+            "send": false
+          },
+          {
+            "label": "Step 4: IaC Plan (Terraform)",
+            "agent": "05-IaC Planner",
+            "prompt": "Create a Terraform implementation plan. Input: `02-architecture-assessment.md`, live `04-governance-constraints.md/.json`, and `governance_baseline=live`; if the baseline is `reference` or unset, return to `04g-Governance` for Refresh Governance. Output: `04-implementation-plan.md` plus dependency/runtime diagrams. Set decisions.iac_tool to Terraform.",
+            "send": true
+          },
+          {
+            "label": "Step 5: Generate Terraform",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: decisions.iac_tool=Terraform and `agent-output/{project}/04-implementation-plan.md`. Implement the Terraform configuration under `infra/terraform/{project}/`. Output: selected-track infra, validation evidence, and `05-iac-handoff.json`.",
+            "send": true
+          },
+          {
+            "label": "Step 6: Deploy (Terraform)",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: decisions.iac_tool=Terraform, validated `infra/terraform/{project}/`, and `05-iac-handoff.json`. Deploy after preview and approval. Output: `06-deployment-summary.md`.",
+            "send": false
+          },
+          {
+            "label": "Step 7: As-Built Documentation",
+            "agent": "08-As-Built",
+            "prompt": "Generate the complete Step 7 documentation suite for the deployed project. Input: all prior artifacts (01-06) in `agent-output/{project}/` plus deployed resource state. Output: `07-*.md` documentation suite (design doc, runbook, cost estimate, compliance matrix, resource inventory).",
+            "send": true
+          },
+          {
+            "label": "🔧 Diagnose Issues",
+            "agent": "09-Diagnose",
+            "prompt": "Troubleshoot issues with the current workflow or Azure resources. Input: deployed resource state + agent-output/{project}/. Output: agent-output/{project}/diagnose-report-*.md.",
+            "send": false
+          },
+          {
+            "label": "🔍 Run Challenger Review",
+            "agent": "10-Challenger",
+            "prompt": "Run an adversarial review on the artifact specified by the current gate (Requirements, Architecture, Governance, Plan, or Code). Input: artifact path passed by the orchestrator (e.g. agent-output/{project}/01-requirements.md). Output: gated reviews are recorded through apex/recordReview or ungated reviews return an inline findings summary. Re-enter the orchestrator after the user reviews the findings.",
+            "send": true
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/02-requirements.agent.md",
+      "frontmatter": {
+        "name": "02-Requirements",
+        "model": [
+          "Claude Opus 5.5 (copilot)"
+        ],
+        "reasoning-effort": "high",
+        "description": "Researches and captures Azure platform engineering project requirements",
+        "argument-hint": "Describe the Azure workload or project you want to gather requirements for",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "todo",
+          "apex/status",
+          "apex/init",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/reviewRequest",
+          "apex/recordReview",
+          "apex/handoff"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Refine Requirements",
+            "agent": "02-Requirements",
+            "prompt": "Review the current requirements document and refine based on new information or clarifications. Input: `agent-output/{project}/01-requirements.md`. Output: updated `agent-output/{project}/01-requirements.md`.",
+            "send": false
+          },
+          {
+            "label": "▶ Ask Clarifying Questions",
+            "agent": "02-Requirements",
+            "prompt": "Generate clarifying questions to fill gaps in the current requirements. Focus on NFRs, compliance, budget, and regional preferences. Input: user prompt + answers gathered so far. Output: updated questioning state with no artifact yet.",
+            "send": false
+          },
+          {
+            "label": "▶ Validate Completeness",
+            "agent": "02-Requirements",
+            "prompt": "Validate the requirements document for completeness against the template. Input: draft `agent-output/{project}/01-requirements.md`. Output: completeness report in chat plus revised `agent-output/{project}/01-requirements.md` if gaps are found.",
+            "send": false
+          },
+          {
+            "label": "🔍 Run Challenger Review",
+            "agent": "10-Challenger",
+            "prompt": "Review the requirements artifact at `agent-output/{project}/01-requirements.md`. Input: completed requirements artifact. Output: gated review evidence recorded by apex/recordReview plus findings summary and Per-Finding Decision Protocol.",
+            "send": true
+          },
+          {
+            "label": "Step 1.5: Governance Discovery",
+            "agent": "04g-Governance",
+            "prompt": "Run governance discovery for a governance-first project after Gate 1. Input: approved `agent-output/{project}/01-requirements.md`, project scope and subscription if available. Output: `04-governance-constraints.md/.json`, `decisions.governance_baseline`, and handoff to `03-Architect`.",
+            "send": true
+          },
+          {
+            "label": "Step 2: Architecture Assessment",
+            "agent": "03-Architect",
+            "prompt": "Legacy-order handoff after Gate 1. Review `agent-output/{project}/01-requirements.md` and create a WAF assessment with cost estimates. Output: `02-architecture-assessment.md` and `03-des-cost-estimate.md`.",
+            "send": true
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Returning from Step 1 (Requirements). Input: artifacts at `agent-output/{project}/01-requirements.md`. Output: orchestrator next-step guidance.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/03-architect.agent.md",
+      "frontmatter": {
+        "name": "03-Architect",
+        "description": "Expert Architect providing guidance using Azure Well-Architected Framework principles and Microsoft best practices. Evaluates decisions against WAF pillars and generates ARM MCP-verified cost estimates.",
+        "model": [
+          "Claude Opus 5.5 (copilot)"
+        ],
+        "reasoning-effort": "high",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [
+          "cost-estimate-subagent"
+        ],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "web",
+          "apex-azure-mcp/*",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/completeStep",
+          "apex/reviewAudit",
+          "apex/reviewRequest",
+          "apex/recordReview",
+          "apex/handoff"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Refresh Cost Estimate",
+            "agent": "03-Architect",
+            "prompt": "Re-query Azure Resource Manager MCP through cost-estimate-subagent to update current pricing and totals. Input: agent-output/{project}/02-architecture-assessment.md SKU list. Output: agent-output/{project}/03-des-cost-estimate.md.",
+            "send": true
+          },
+          {
+            "label": "▶ Deep Dive WAF Pillar",
+            "agent": "03-Architect",
+            "prompt": "Perform a deeper analysis on a specific WAF pillar. Which pillar should I analyze in more detail? (Security, Reliability, Performance, Cost, Operations) Input: agent-output/{project}/02-architecture-assessment.md. Output: expanded pillar analysis appended to the same assessment file.",
+            "send": false
+          },
+          {
+            "label": "▶ Compare SKU Options",
+            "agent": "03-Architect",
+            "prompt": "Compare alternative SKU options for key resources. Analyze trade-offs between cost, performance, and features. Input: current SKU choices in agent-output/{project}/02-architecture-assessment.md. Output: SKU trade-off matrix written to agent-output/{project}/03-des-sku-comparison.md.",
+            "send": true
+          },
+          {
+            "label": "Step 3: Design Artifacts",
+            "agent": "04-Design",
+            "prompt": "Begin Step 3 from agent-output/{project}/02-architecture-assessment.md. Ask once for design scope (Diagrams only, ADRs only, or Both), then record design_scope. When diagrams are in scope, record diagram_tool=python and use the python-diagrams skill. Outputs: 03-des-diagram.py with PNG/SVG siblings and/or 03-des-adr-NNNN-{slug}.md.",
+            "send": true
+          },
+          {
+            "label": "Step 3.5: Governance Discovery",
+            "agent": "04g-Governance",
+            "prompt": "Refresh Governance. Input: approved `02-architecture-assessment.md` and subscription context. Output: refreshed `04-governance-constraints.md/.json` and `governance_baseline`.",
+            "send": true
+          },
+          {
+            "label": "↩ Return to Step 1",
+            "agent": "02-Requirements",
+            "prompt": "Returning to requirements for refinement. Review `agent-output/{project}/01-requirements.md` — architecture assessment identified gaps that need addressing.",
+            "send": false
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Returning from Step 2 (Architecture). Artifacts at `agent-output/{project}/02-architecture-assessment.md` and `agent-output/{project}/03-des-cost-estimate.md`. Advise on next steps.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/04-design.agent.md",
+      "frontmatter": {
+        "name": "04-Design",
+        "model": [
+          "Claude Sonnet 5.5 (copilot)"
+        ],
+        "reasoning-effort": "medium",
+        "description": "Step 3 — Design Artifacts. Generates code-based Python architecture diagrams and Architecture Decision Records for approved Azure designs. Optional step before governance and IaC planning.",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "web",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/handoff"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Generate Diagram",
+            "agent": "04-Design",
+            "prompt": "This handoff implies design_scope=diagrams. Record design_scope=diagrams and diagram_tool=python through apex/decide before other work. Input: agent-output/{project}/02-architecture-assessment.md. Use the python-diagrams skill and its shared diagram_io.py helper. Output: agent-output/{project}/03-des-diagram.py plus .png and .svg siblings.",
+            "send": true
+          },
+          {
+            "label": "▶ Generate ADR",
+            "agent": "04-Design",
+            "prompt": "This handoff implies design_scope=adrs. Record it through apex/decide before other work, then create ADRs from agent-output/{project}/02-architecture-assessment.md using the azure-adr skill.",
+            "send": false
+          },
+          {
+            "label": "▶ Generate Cost Estimate",
+            "agent": "03-Architect",
+            "prompt": "Generate a detailed cost estimate through cost-estimate-subagent and Azure Resource Manager MCP. Save it to agent-output/{project}/03-des-cost-estimate.md.",
+            "send": false
+          },
+          {
+            "label": "Step 3.5: Governance Discovery",
+            "agent": "04g-Governance",
+            "prompt": "Discover Azure Policy constraints for agent-output/{project}/. Produce 04-governance-constraints.md and .json, then run adversarial review.",
+            "send": true
+          },
+          {
+            "label": "↩ Return to Step 2",
+            "agent": "03-Architect",
+            "prompt": "Review agent-output/{project}/02-architecture-assessment.md for architecture re-evaluation.",
+            "send": false
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Return from Step 3. Input: completed artifacts under agent-output/{project}/. Output: orchestrator resume context for governance discovery or IaC planning, including Python diagram source with PNG/SVG renders, ADRs, and any optional cost estimate.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/04g-governance.agent.md",
+      "frontmatter": {
+        "name": "04g-Governance",
+        "description": "Azure governance discovery agent. Queries Azure Policy assignments or imports the reference baseline, classifies effects, emits governance constraint artifacts, records governance_baseline, and routes to Architect.",
+        "model": [
+          "Claude Sonnet 5.5 (copilot)"
+        ],
+        "reasoning-effort": "medium",
+        "argument-hint": "Discover governance constraints for a project",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "web",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/transition",
+          "apex/reviewAudit",
+          "apex/reviewRequest",
+          "apex/recordReview",
+          "apex/handoff"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Refresh Governance",
+            "agent": "04g-Governance",
+            "prompt": "Re-run governance discovery for this project. Input: current project scope and Azure subscription. Query Azure Policy REST API, replace any reference baseline, update 04-governance-constraints.md/.json, and record `governance_baseline=live`. Output: refreshed governance artifacts and the next handoff.",
+            "send": true
+          },
+          {
+            "label": "Step 2: Architecture Assessment",
+            "agent": "03-Architect",
+            "prompt": "Governance discovery is complete for a governance-first project. Input: `01-requirements.md`, `04-governance-constraints.md`, `04-governance-constraints.json`, and `decisions.governance_baseline`. Output: `02-architecture-assessment.md`, `02-policy-map.json`, and `03-des-cost-estimate.md`.",
+            "send": true
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Governance discovery is complete. Resume the workflow. Input: current phase artifacts under agent-output/{project}/. Output: control returns to 01-Orchestrator (no new artifact).",
+            "send": true
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/05-iac-planner.agent.md",
+      "frontmatter": {
+        "name": "05-IaC Planner",
+        "description": "Expert Azure IaC planner that creates comprehensive machine-readable implementation plans. Consults Microsoft documentation, evaluates Azure Verified Modules (Bicep or Terraform), designs full infrastructure solutions with architecture diagrams. Routes by decisions.iac_tool.",
+        "model": [
+          "Claude Opus 5.5 (copilot)"
+        ],
+        "reasoning-effort": "high",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "web",
+          "apex-azure-mcp/*",
+          "bicep/*",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/completeStep",
+          "apex/reviewAudit",
+          "apex/reviewRequest",
+          "apex/recordReview",
+          "apex/handoff"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Refresh Governance",
+            "agent": "04g-Governance",
+            "prompt": "Refresh Governance with live Azure Policy discovery. Input: current project scope, subscription and Step 4 block reason (`governance_baseline_reference`, `governance_baseline_unset`, stale L0 metadata, or policy drift). Output: `04-governance-constraints.md/.json` and `governance_baseline=live`.",
+            "send": true
+          },
+          {
+            "label": "▶ Revise Plan",
+            "agent": "05-IaC Planner",
+            "prompt": "Revise the implementation plan based on new information or feedback. Update `agent-output/{project}/04-implementation-plan.md`.",
+            "send": true
+          },
+          {
+            "label": "▶ Compare AVM Modules",
+            "agent": "05-IaC Planner",
+            "prompt": "Query AVM metadata for all planned resources. Compare available vs required parameters and flag any gaps. Input: agent-output/{project}/04-implementation-plan.md current module choices. Output: AVM trade-off matrix appended to the implementation plan.",
+            "send": true
+          },
+          {
+            "label": "Step 5: Generate Bicep",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: decisions.iac_tool=Bicep and `agent-output/{project}/04-implementation-plan.md`. Output: Bicep implementation under `infra/bicep/{project}/`, validation evidence, and `05-iac-handoff.json`.",
+            "send": true
+          },
+          {
+            "label": "Step 5: Generate Terraform",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: decisions.iac_tool=Terraform and `agent-output/{project}/04-implementation-plan.md`. Output: Terraform implementation under `infra/terraform/{project}/`, validation evidence, and `05-iac-handoff.json`.",
+            "send": true
+          },
+          {
+            "label": "↩ Return to Step 2",
+            "agent": "03-Architect",
+            "prompt": "Returning to architecture assessment for re-evaluation. Review `agent-output/{project}/02-architecture-assessment.md` — WAF scores and recommendations may need adjustment.",
+            "send": false
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Returning from Step 4 (IaC Planning). Artifacts at `agent-output/{project}/04-implementation-plan.md` and `agent-output/{project}/04-governance-constraints.md`. Advise on next steps.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/06-iac-codegen.agent.md",
+      "frontmatter": {
+        "name": "06-IaC CodeGen",
+        "description": "Creates approved Azure IaC for the selected track. Reads iac_tool, loads Bicep or Terraform skills, validates with the merged worker, and emits Step 5 handoff artifacts.",
+        "model": [
+          "Claude Sonnet 5.5 (copilot)"
+        ],
+        "reasoning-effort": "medium",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [
+          "iac-validate-subagent"
+        ],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "web",
+          "apex-azure-mcp/*",
+          "bicep/*",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/reviewAudit",
+          "apex/handoff",
+          "apex/artifactOutline",
+          "apex/artifactSection"
+        ],
+        "handoffs": [
+          {
+            "label": "Run Preflight Check",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: project slug and current Step 4 artifacts. Run the selected-track preflight from `agent-output/{project}/04-implementation-plan.md` and save `agent-output/{project}/04-preflight-check.md`. Output: blockers, decisions, and next CodeGen phase.",
+            "send": true
+          },
+          {
+            "label": "Fix Validation Errors",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: validation output from `iac-validate-subagent` and current infra tree. Fix only the selected track's files in `infra/{bicep|terraform}/{project}/`, then re-run validation. Output: patched infra files plus passing validator evidence.",
+            "send": true
+          },
+          {
+            "label": "Generate Implementation Reference",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: selected track, generated infra tree, and validation status. Generate or update `agent-output/{project}/05-implementation-reference.md` and `05-iac-handoff.json`. Output: implementation reference and handoff contract.",
+            "send": true
+          },
+          {
+            "label": "Step 6: Deploy",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: selected track from `decisions.iac_tool`, validated infra under `infra/{bicep|terraform}/{project}/`, and `agent-output/{project}/05-iac-handoff.json`. Output: deploy preview and Step 6 deployment summary.",
+            "send": true
+          },
+          {
+            "label": "Return to Step 4",
+            "agent": "05-IaC Planner",
+            "prompt": "Input: implementation findings that require plan revision. Output: updated `agent-output/{project}/04-implementation-plan.md` and current review evidence.",
+            "send": false
+          },
+          {
+            "label": "Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Input: Step 5 completion status and selected track. Output: workflow routing after `05-implementation-reference.md` and `05-iac-handoff.json` are current.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/07-iac-deploy.agent.md",
+      "frontmatter": {
+        "name": "07-IaC Deploy",
+        "model": [
+          "Claude Sonnet 5.5 (copilot)"
+        ],
+        "reasoning-effort": "medium",
+        "description": "Executes approved Azure deployments for the selected IaC track. Runs Bicep what-if or Terraform plan plus live policy precheck before explicit apply approval.",
+        "argument-hint": "Deploy the approved IaC for a specific project",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [
+          "iac-preview-subagent",
+          "iac-validate-subagent"
+        ],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "apex-azure-mcp/*",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/handoff",
+          "apex/artifactOutline",
+          "apex/artifactSection"
+        ],
+        "handoffs": [
+          {
+            "label": "Run Preview Only",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: selected track from `decisions.iac_tool`, current infra tree, parameters or tfvars, and target scope. Run Bicep what-if or Terraform plan plus live policy precheck. Output: preview report only; no resources deployed.",
+            "send": true
+          },
+          {
+            "label": "Deploy Next Phase",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: selected track and `agent-output/{project}/04-implementation-plan.md`. Deploy the next uncompleted phase after preview, policy precheck, and explicit approval. Output: updated `06-deployment-summary.md`.",
+            "send": true
+          },
+          {
+            "label": "Deploy All Phases",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: selected track and approved phase plan. Deploy all remaining phases sequentially with preview, live policy precheck, and approval gates between phases. Output: deployment summary per completed phase.",
+            "send": true
+          },
+          {
+            "label": "Retry Deployment",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: previous deployment error and `agent-output/{project}/06-deployment-summary.md`. Re-run preflight validation, preview, policy precheck, and approval-bound apply with the same selected track. Output: updated deployment summary.",
+            "send": true
+          },
+          {
+            "label": "Verify Resources",
+            "agent": "07-IaC Deploy",
+            "prompt": "Input: deployed resource group, Terraform outputs when applicable, and deployment summary. Query Azure Resource Graph and resource health. Output: verification table appended to `agent-output/{project}/06-deployment-summary.md`.",
+            "send": true
+          },
+          {
+            "label": "Step 7: As-Built Documentation",
+            "agent": "08-As-Built",
+            "prompt": "Input: successful deployment summary at `agent-output/{project}/06-deployment-summary.md` plus prior artifacts. Output: complete Step 7 as-built documentation suite.",
+            "send": true
+          },
+          {
+            "label": "Fix Deployment Issues",
+            "agent": "06-IaC CodeGen",
+            "prompt": "Input: selected track, deployment error log, and current infra tree. Output: patched infra files plus fresh preview and validation evidence.",
+            "send": true
+          },
+          {
+            "label": "Return to Step 2",
+            "agent": "03-Architect",
+            "prompt": "Input: deployment results requiring architecture review. Output: updated WAF assessment and design disposition.",
+            "send": false
+          },
+          {
+            "label": "Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Input: Step 6 deployment status and `agent-output/{project}/06-deployment-summary.md`. Output: routing to as-built documentation or recovery.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/08-as-built.agent.md",
+      "frontmatter": {
+        "name": "08-As-Built",
+        "description": "Generates Step 7 as-built documentation suite after successful deployment. Reads all prior artifacts (Steps 1-6) and deployed resource state to produce: design document, operations runbook, cost estimate, compliance matrix, backup/DR plan, resource inventory, and documentation index.",
+        "model": [
+          "Claude Sonnet 5.5 (copilot)"
+        ],
+        "reasoning-effort": "medium",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [
+          "cost-estimate-subagent"
+        ],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "search",
+          "web",
+          "apex-azure-mcp/*",
+          "todo",
+          "apex/status",
+          "apex/checkpoint",
+          "apex/decide",
+          "apex/finding",
+          "apex/completeStep",
+          "apex/handoff",
+          "apex/artifactOutline",
+          "apex/artifactSection",
+          "apex/renderDocument"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Generate All Documentation",
+            "agent": "08-As-Built",
+            "prompt": "Generate the complete Step 7 documentation suite for the deployed project. Read all prior artifacts in `agent-output/{project}/` and query deployed resources. Input: agent-output/{project}/06-deployment-summary.md + deployed resource state. Output: full as-built suite at agent-output/{project}/07-*.md.",
+            "send": true
+          },
+          {
+            "label": "▶ Generate As-Built Diagram",
+            "agent": "08-As-Built",
+            "prompt": "Generate as-built Mermaid diagrams through apex/renderDocument from structured Step 7 sources. Input: 07-resource-inventory.json plus deployment evidence. Output: Mermaid blocks embedded in rendered Step 7 Markdown. Python diagrams are optional contributor extras only.",
+            "send": true
+          },
+          {
+            "label": "▶ Generate Cost Estimate Only",
+            "agent": "08-As-Built",
+            "prompt": "Generate only the as-built cost estimate (`agent-output/{project}/07-ab-cost-estimate.md`). Query deployed resources for actual SKUs, then delegate pricing to cost-estimate-subagent. Use subagent-returned prices verbatim.",
+            "send": true
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Returning from Step 7 (As-Built Documentation). Complete documentation suite generated at `agent-output/{project}/07-*.md` including design document, operations runbook, cost estimate, compliance matrix, and resource inventory. Workflow is complete.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/09-diagnose.agent.md",
+      "frontmatter": {
+        "name": "09-Diagnose",
+        "model": [
+          "Claude Sonnet 5.5 (copilot)"
+        ],
+        "reasoning-effort": "medium",
+        "description": "Interactive diagnostic agent that guides users through Azure resource health assessment, issue identification, and remediation planning. Scope-first execution with approval for every change, single-resource scope, reports to agent-output/{project}/.",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "edit",
+          "search",
+          "apex-azure-mcp/*",
+          "todo",
+          "apex/status",
+          "apex/finding"
+        ],
+        "handoffs": [
+          {
+            "label": "▶ Expand Scope",
+            "agent": "09-Diagnose",
+            "prompt": "Expand the diagnostic scope to include related resources. Query resource dependencies and assess health of connected resources. Input: current resource under diagnosis + sibling resource group. Output: expanded findings in agent-output/{project}/08-resource-health-report.md.",
+            "send": true
+          },
+          {
+            "label": "▶ Deep Dive Logs",
+            "agent": "09-Diagnose",
+            "prompt": "Perform deep log analysis on the current resource. Query activity logs and diagnostic logs for detailed error information. Input: Application Insights / Log Analytics workspace ID. Output: log analysis section appended to agent-output/{project}/08-resource-health-report.md.",
+            "send": true
+          },
+          {
+            "label": "▶ Re-run Health Check",
+            "agent": "09-Diagnose",
+            "prompt": "Re-run the resource health assessment to check for status changes after remediation actions. Input: current diagnostic target resource ID. Output: refreshed health snapshot in agent-output/{project}/08-resource-health-report.md.",
+            "send": true
+          },
+          {
+            "label": "▶ Generate Workload Documentation",
+            "agent": "08-As-Built",
+            "prompt": "Generate as-built documentation incorporating health assessment findings from `agent-output/{project}/08-resource-health-report.md`. Input: all prior artifacts + diagnostic report. Output: `07-*.md` documentation suite.",
+            "send": true
+          },
+          {
+            "label": "↩ Escalate to Architect",
+            "agent": "03-Architect",
+            "prompt": "Completed a resource health assessment that identified architectural issues requiring WAF evaluation. Please review the findings in `agent-output/{project}/08-resource-health-report.md` and provide architectural recommendations.",
+            "send": false
+          },
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Returning from Diagnostics. Report at `agent-output/{project}/08-resource-health-report.md`. Advise on next steps.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/10-challenger.agent.md",
+      "frontmatter": {
+        "name": "10-Challenger",
+        "description": "Standalone adversarial review entry point. Runs gated reviews through apex/reviewRequest, rubber-duck, and apex/recordReview, or ungated rubber-duck reviews inline, then runs the Per-Finding Decision Protocol.",
+        "model": [
+          "Claude Opus 5.5 (copilot)"
+        ],
+        "reasoning-effort": "high",
+        "argument-hint": "Provide the path to the artifact to challenge (e.g. agent-output/my-project/04-implementation-plan.md)",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "tools": [
+          "vscode/askQuestions",
+          "execute",
+          "read",
+          "agent",
+          "edit",
+          "apex/status",
+          "apex/finding",
+          "apex/reviewRequest",
+          "apex/recordReview"
+        ],
+        "agents": [],
+        "handoffs": [
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Challenge complete. Input: challenged artifact, resolved findings_path and decisions_path from the canonical path mapping, and apply summary. Output: control returns to 01-Orchestrator for the owning step; no new artifact beyond findings, decisions and approved in-place edits. Carry the actual resolved paths, not artifact_type-derived filenames.",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/11-context-optimizer.agent.md",
+      "frontmatter": {
+        "name": "11-Context Optimizer",
+        "model": [
+          "Claude Opus 5.5 (copilot)"
+        ],
+        "reasoning-effort": "high",
+        "description": "Analyzes Copilot Chat debug logs to audit context-window utilization across agents. Identifies bloated prompts, redundant file reads, missing hand-off points, and wasted tokens. Produces actionable optimization reports. Recommendations only — never edits agents.",
+        "user-invocable": true,
+        "disable-model-invocation": true,
+        "agents": [],
+        "tools": [
+          "vscode/askQuestions",
+          "execute/runInTerminal",
+          "execute/getTerminalOutput",
+          "read/readFile",
+          "read/problems",
+          "read/terminalLastCommand",
+          "read/terminalSelection",
+          "search/codebase",
+          "search/fileSearch",
+          "search/listDirectory",
+          "search/textSearch",
+          "edit",
+          "apex/finding"
+        ],
+        "handoffs": [
+          {
+            "label": "↩ Return to Orchestrator",
+            "agent": "01-Orchestrator",
+            "prompt": "Completed context optimization audit. Report saved. Advise on next steps. Input: current phase artifacts under agent-output/{project}/. Output: control returns to 01-Orchestrator (no new artifact).",
+            "send": false
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/_subagents/challenger-review-subagent.agent.md",
+      "frontmatter": {
+        "name": "challenger-review-subagent",
+        "description": "Unified adversarial review subagent that challenges Azure infrastructure artifacts. Finds untested assumptions, governance gaps, WAF blind spots, and architectural weaknesses. Returns structured JSON findings. Supports single-pass and multi-pass rotating-lens reviews; batches lenses per invocation.",
+        "model": [
+          "GPT-6 Luna (copilot)"
+        ],
+        "reasoning-effort": "max",
+        "disable-model-invocation": false,
+        "user-invocable": false,
+        "agents": [],
+        "tools": [
+          "execute",
+          "read",
+          "edit",
+          "search"
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/_subagents/cost-estimate-subagent.agent.md",
+      "frontmatter": {
+        "name": "cost-estimate-subagent",
+        "description": "Azure cost estimation subagent. Uses Azure Resource Manager MCP retail pricing and cost data, then returns a structured cost breakdown through a file-based contract.",
+        "model": [
+          "GPT-6 Luna (copilot)"
+        ],
+        "reasoning-effort": "max",
+        "user-invocable": false,
+        "disable-model-invocation": false,
+        "agents": [],
+        "tools": [
+          "execute",
+          "read",
+          "edit",
+          "search",
+          "apex-azure-pricing/get_retail_prices",
+          "apex-azure-pricing/query_costs",
+          "apex-azure-pricing/query_aks_costs",
+          "apex-azure-pricing/forecast_costs",
+          "apex-azure-pricing/list_dimensions",
+          "apex-azure-pricing/list_benefit_utilization",
+          "apex-azure-pricing/get_benefit_recommendations"
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/_subagents/iac-preview-subagent.agent.md",
+      "frontmatter": {
+        "name": "iac-preview-subagent",
+        "description": "IaC preview worker for Bicep or Terraform. Runs Bicep what-if or Terraform plan plus live Azure Policy precheck and returns preview summary with deterministic deploy gate.",
+        "model": [
+          "GPT-6 Luna (copilot)"
+        ],
+        "reasoning-effort": "max",
+        "user-invocable": false,
+        "disable-model-invocation": false,
+        "agents": [],
+        "tools": [
+          "execute",
+          "read",
+          "edit",
+          "search",
+          "apex/status",
+          "apex/artifactOutline",
+          "apex/artifactSection"
+        ]
+      }
+    },
+    {
+      "path": ".github/agents/_subagents/iac-validate-subagent.agent.md",
+      "frontmatter": {
+        "name": "iac-validate-subagent",
+        "description": "IaC validation worker for Bicep or Terraform. Runs track lint/build or fmt/validate, reviews AVM/AVM-TF, security, RBAC and governance, and returns the existing verdict contract.",
+        "model": [
+          "GPT-6 Luna (copilot)"
+        ],
+        "reasoning-effort": "max",
+        "user-invocable": false,
+        "disable-model-invocation": false,
+        "agents": [],
+        "tools": [
+          "execute",
+          "read",
+          "search",
+          "bicep/*",
+          "apex/status",
+          "apex/artifactOutline",
+          "apex/artifactSection"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,344 @@
+{
+  "$schema": "../schemas/harness-compat.schema.json",
+  "description": "Copilot harness compatibility map for the feat/copilot-harness-only branch. Agent frontmatter stays canonical; this file declares how model labels, tool IDs and frontmatter fields translate to the GitHub Copilot SDK runtime and Copilot custom-agent profiles. Validated by tools/scripts/validate-harness-compat.mjs.",
+  "sdk": {
+    "package": "@github/copilot-sdk",
+    "version": "1.0.16",
+    "runtime_version": "1.0.16",
+    "evidence": "Live SDK spike probes 1 and 2 (2026-10-01): model/effort, tool restriction, worker allowlist via onPreToolUse, ask_user, permissions and cold resume on 02-Requirements with challenger-review-subagent."
+  },
+  "frontmatter": {
+    "portable": [
+      "name",
+      "description",
+      "target",
+      "tools",
+      "model",
+      "disable-model-invocation",
+      "user-invocable",
+      "mcp-servers",
+      "metadata"
+    ],
+    "router_owned": {
+      "reasoning-effort": "Router passes it as SDK reasoningEffort; Copilot profiles cannot express it.",
+      "agents": "Router denies non-listed task targets in onPreToolUse; infer:false alone does not prevent self-nesting.",
+      "handoffs": "Ignored by Copilot clients; replaced by apex-recall checkpoints and router routing.",
+      "argument-hint": "Ignored by Copilot clients; router CLI help carries invocation hints."
+    },
+    "target_policy": "unset"
+  },
+  "router_rules": {
+    "excluded_builtin_agents": [
+      "task",
+      "explore",
+      "general-purpose",
+      "rubber-duck",
+      "code-review",
+      "research",
+      "security-review",
+      "rem-agent"
+    ],
+    "deny_unlisted_task_targets": true,
+    "pin_allowed_models": true,
+    "verify_observed_model": true
+  },
+  "models": {
+    "Claude Opus 5.5 (copilot)": {
+      "sdk_id": "claude-opus-5.5",
+      "verification": "exercised",
+      "efforts": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "Claude Sonnet 5.5 (copilot)": {
+      "sdk_id": "claude-sonnet-5.5",
+      "verification": "listed",
+      "efforts": ["low", "medium", "high", "xhigh", "max"]
+    },
+    "GPT-6 Luna (copilot)": {
+      "sdk_id": "gpt-6-luna",
+      "verification": "exercised",
+      "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
+    },
+    "MAI-Code-1.1-Flash": {
+      "sdk_id": "mai-code-1.1-flash",
+      "verification": "listed",
+      "efforts": ["low", "medium", "high"]
+    }
+  },
+  "tools": {
+    "agent": {
+      "support": "mapped",
+      "sdk": ["task", "read_agent", "list_agents"],
+      "cloud_alias": "agent",
+      "verification": "exercised"
+    },
+    "edit": {
+      "support": "mapped",
+      "sdk": ["edit", "create"],
+      "cloud_alias": "edit",
+      "verification": "exercised"
+    },
+    "execute": {
+      "support": "mapped",
+      "sdk": ["bash", "read_bash", "write_bash", "stop_bash", "list_bash"],
+      "cloud_alias": "execute",
+      "verification": "listed"
+    },
+    "execute/getTerminalOutput": {
+      "support": "mapped",
+      "sdk": ["read_bash"],
+      "cloud_alias": "execute",
+      "verification": "listed"
+    },
+    "execute/runInTerminal": {
+      "support": "mapped",
+      "sdk": ["bash"],
+      "cloud_alias": "execute",
+      "verification": "listed"
+    },
+    "read": {
+      "support": "mapped",
+      "sdk": ["view"],
+      "cloud_alias": "read",
+      "verification": "listed"
+    },
+    "read/readFile": {
+      "support": "mapped",
+      "sdk": ["view"],
+      "cloud_alias": "read",
+      "verification": "listed"
+    },
+    "read/problems": {
+      "support": "unsupported",
+      "sdk": [],
+      "cloud_alias": null,
+      "verification": "unverified",
+      "note": "VS Code diagnostics are editor-only; use the language's CLI linter or build instead."
+    },
+    "read/terminalLastCommand": {
+      "support": "unsupported",
+      "sdk": [],
+      "cloud_alias": null,
+      "verification": "unverified",
+      "note": "Editor terminal state is not visible to Copilot sessions."
+    },
+    "read/terminalSelection": {
+      "support": "unsupported",
+      "sdk": [],
+      "cloud_alias": null,
+      "verification": "unverified",
+      "note": "Editor terminal selection is not visible to Copilot sessions."
+    },
+    "search": {
+      "support": "mapped",
+      "sdk": ["grep", "glob"],
+      "cloud_alias": "search",
+      "verification": "listed"
+    },
+    "search/codebase": {
+      "support": "approximate",
+      "sdk": ["grep", "glob"],
+      "cloud_alias": "search",
+      "verification": "unverified",
+      "note": "No semantic codebase search; text and glob search substitute."
+    },
+    "search/fileSearch": {
+      "support": "mapped",
+      "sdk": ["glob"],
+      "cloud_alias": "search",
+      "verification": "listed"
+    },
+    "search/listDirectory": {
+      "support": "mapped",
+      "sdk": ["view", "glob"],
+      "cloud_alias": "read",
+      "verification": "listed"
+    },
+    "search/textSearch": {
+      "support": "mapped",
+      "sdk": ["grep"],
+      "cloud_alias": "search",
+      "verification": "listed"
+    },
+    "todo": {
+      "support": "mapped",
+      "sdk": ["sql"],
+      "cloud_alias": "todo",
+      "verification": "listed"
+    },
+    "vscode/askQuestions": {
+      "support": "mapped",
+      "sdk": ["ask_user"],
+      "cloud_alias": null,
+      "verification": "exercised",
+      "note": "Cloud agent cannot ask the user mid-task; checkpoint and stop instead."
+    },
+    "web": {
+      "support": "mapped",
+      "sdk": ["web_fetch"],
+      "cloud_alias": "web",
+      "verification": "unverified"
+    },
+    "apex-azure-mcp/*": {
+      "support": "mapped",
+      "sdk": ["mcp:*"],
+      "cloud_alias": "apex-azure-mcp/*",
+      "verification": "unverified",
+      "note": "Copilot sessions reach only local MCP servers that need no interactive authentication."
+    },
+    "apex-azure-pricing/forecast_costs": {
+      "support": "mapped",
+      "sdk": ["mcp:forecast_costs"],
+      "cloud_alias": "apex-azure-pricing/forecast_costs",
+      "verification": "unverified"
+    },
+    "apex-azure-pricing/get_benefit_recommendations": {
+      "support": "mapped",
+      "sdk": ["mcp:get_benefit_recommendations"],
+      "cloud_alias": "apex-azure-pricing/get_benefit_recommendations",
+      "verification": "unverified"
+    },
+    "apex-azure-pricing/get_retail_prices": {
+      "support": "mapped",
+      "sdk": ["mcp:get_retail_prices"],
+      "cloud_alias": "apex-azure-pricing/get_retail_prices",
+      "verification": "unverified"
+    },
+    "apex-azure-pricing/list_benefit_utilization": {
+      "support": "mapped",
+      "sdk": ["mcp:list_benefit_utilization"],
+      "cloud_alias": "apex-azure-pricing/list_benefit_utilization",
+      "verification": "unverified"
+    },
+    "apex-azure-pricing/list_dimensions": {
+      "support": "mapped",
+      "sdk": ["mcp:list_dimensions"],
+      "cloud_alias": "apex-azure-pricing/list_dimensions",
+      "verification": "unverified"
+    },
+    "apex-azure-pricing/query_aks_costs": {
+      "support": "mapped",
+      "sdk": ["mcp:query_aks_costs"],
+      "cloud_alias": "apex-azure-pricing/query_aks_costs",
+      "verification": "unverified"
+    },
+    "apex-azure-pricing/query_costs": {
+      "support": "mapped",
+      "sdk": ["mcp:query_costs"],
+      "cloud_alias": "apex-azure-pricing/query_costs",
+      "verification": "unverified"
+    },
+    "bicep/*": {
+      "support": "mapped",
+      "sdk": ["mcp:*"],
+      "cloud_alias": "bicep/*",
+      "verification": "unverified",
+      "note": "Copilot sessions reach only local MCP servers that need no interactive authentication."
+    },
+    "apex/status": {
+      "support": "mapped",
+      "sdk": ["mcp:status"],
+      "cloud_alias": "apex/status",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/init": {
+      "support": "mapped",
+      "sdk": ["mcp:init"],
+      "cloud_alias": "apex/init",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/startStep": {
+      "support": "mapped",
+      "sdk": ["mcp:startStep"],
+      "cloud_alias": "apex/startStep",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/checkpoint": {
+      "support": "mapped",
+      "sdk": ["mcp:checkpoint"],
+      "cloud_alias": "apex/checkpoint",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/decide": {
+      "support": "mapped",
+      "sdk": ["mcp:decide"],
+      "cloud_alias": "apex/decide",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/finding": {
+      "support": "mapped",
+      "sdk": ["mcp:finding"],
+      "cloud_alias": "apex/finding",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/completeStep": {
+      "support": "mapped",
+      "sdk": ["mcp:completeStep"],
+      "cloud_alias": "apex/completeStep",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/transition": {
+      "support": "mapped",
+      "sdk": ["mcp:transition"],
+      "cloud_alias": "apex/transition",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/reviewAudit": {
+      "support": "mapped",
+      "sdk": ["mcp:reviewAudit"],
+      "cloud_alias": "apex/reviewAudit",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/reviewRequest": {
+      "support": "mapped",
+      "sdk": ["mcp:reviewRequest"],
+      "cloud_alias": "apex/reviewRequest",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/recordReview": {
+      "support": "mapped",
+      "sdk": ["mcp:recordReview"],
+      "cloud_alias": "apex/recordReview",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/artifactOutline": {
+      "support": "mapped",
+      "sdk": ["mcp:artifactOutline"],
+      "cloud_alias": "apex/artifactOutline",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/artifactSection": {
+      "support": "mapped",
+      "sdk": ["mcp:artifactSection"],
+      "cloud_alias": "apex/artifactSection",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/renderDocument": {
+      "support": "mapped",
+      "sdk": ["mcp:renderDocument"],
+      "cloud_alias": "apex/renderDocument",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    },
+    "apex/handoff": {
+      "support": "mapped",
+      "sdk": ["mcp:handoff"],
+      "cloud_alias": "apex/handoff",
+      "verification": "unverified",
+      "note": "apex workflow MCP server (plugin server `apex`; contributors run it from source). Qualified per client in BL-14."
+    }
+  },
+  "body_limit_exceptions": []
+}

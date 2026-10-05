@@ -1,0 +1,38 @@
+{
+  "schema_version": "asbuilt-render-templates-v1",
+  "templates": [
+    {
+      "id": "apex.asbuilt.resourceInventory.v1",
+      "documentKind": "resourceInventory",
+      "artifact": "07-resource-inventory.md",
+      "required_structured_slots": ["resourceInventory.resources"],
+      "optional_structured_sources": ["02-cost-estimate.json", "sku-manifest.json"],
+      "optional_narrative_slots": ["summary", "inventoryNotes"],
+      "mermaid_slots": ["resourceInventory.byResourceGroupAndType"]
+    },
+    {
+      "id": "apex.asbuilt.costEstimate.v1",
+      "documentKind": "costEstimate",
+      "artifact": "07-ab-cost-estimate.md",
+      "required_structured_slots": ["costEstimate.monthly_total", "costEstimate.resources"],
+      "optional_structured_sources": ["sku-manifest.json", "02-cost-projection.json"],
+      "optional_narrative_slots": [
+        "decisionSummary",
+        "requirementsCostMapping",
+        "notPayingForYet",
+        "riskIndicators",
+        "quickDecisionMatrix"
+      ],
+      "mermaid_slots": ["costEstimate.byService"]
+    },
+    {
+      "id": "apex.asbuilt.complianceMatrix.v1",
+      "documentKind": "complianceMatrix",
+      "artifact": "07-compliance-matrix.md",
+      "required_structured_slots": ["governanceConstraints.findings"],
+      "optional_structured_sources": ["07-resource-inventory.json", "04-iac-contract.json"],
+      "optional_narrative_slots": ["executiveSummary", "evidenceNotes", "auditTrail", "appendix"],
+      "mermaid_slots": ["complianceMatrix.gapsBySeverity"]
+    }
+  ]
+}
