@@ -16,9 +16,9 @@ only narrow the owning agent's permissions.
 
 MAI must not invoke Sol agents as subagents or perform their work inline.
 The Orchestrator presents a human handoff and stops. Do not enable experimental
-nesting or `context: fork`; do not infer model-tier eligibility or add fallbacks.
+nesting or `context: fork`; do not add fallback owners or tools.
 An explicit caller allowlist controls worker invocation, regardless of a
-recipient's model-invocation flag. Workers return missing inputs to the parent
+recipient's invocation flags. Workers return missing inputs to the parent
 without user questions, parent todo management, or nested dispatch.
 
 ## Entry Contract
@@ -121,5 +121,5 @@ ask the user to choose the next step when the graph determines it.
 Native Agent Host support is manual and unverified. Static tests prove source
 contracts and names, not discovery, exact model availability, tool enforcement,
 or runtime handoff behavior. Test Local and Host fresh/resume/revision on both
-IaC tracks, unavailable owners/models, approval stops, and missing review/input
+IaC tracks, unavailable owners, approval stops, and missing review/input
 recovery manually. Do not claim successful native execution from these files.

@@ -163,13 +163,12 @@ old sessions, default to `"standard"`.
 | **Standard** | 4–8 resource types, multi-region OR multi-env (not both extreme), ≤3 custom policies |
 | **Complex**  | >8 resource types, multi-region + multi-env, >3 custom policies, hub-spoke topology  |
 
-## Model Routing
+## Reviewer Routing
 
-The model used for each review lens is determined by the built-in `rubber-duck`
-agent. All lenses share the same reviewer; the review request rotates the lens per pass.
-Do not infer runtime cost-tier eligibility or API parameters from Sol, Terra,
-or Luna labels or catalog capability descriptions. Unsupported or unknown
-eligibility is not permission to change models or bypass the human handoff.
+Each review lens is executed by the built-in `rubber-duck` agent through
+`apex/reviewRequest` and `apex/recordReview`. All lenses share the same reviewer
+contract; the review request rotates the lens per pass. The selected session
+model is controlled by the client, not by APEX review metadata.
 
 ## Parallel Invocation (Cross-Artifact Reviews)
 

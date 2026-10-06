@@ -24,8 +24,8 @@ Discovery does not wire or authorize a call. Read the
 > (see `agent-output/model-eval-scoring.md`).
 
 Extra validation requests still require an authorized caller, suitable phase,
-available tools, and all preview/approval gates. Unknown model cost-tier
-eligibility is a blocker, not permission to substitute a model.
+available tools, and all preview/approval gates. Agents use the user's selected
+model; missing tools or approvals are blockers.
 
 ## Interactive vs Autonomous Delegation
 

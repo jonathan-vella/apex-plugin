@@ -1,10 +1,10 @@
 <!-- ref:debug-log-export-v1 -->
 # Export Custom-Agent Debug Logs (.apex-logs)
 
-Require selected built-in owner `agent`, model `MAI-Code-1.1-Flash`, and the
+Require selected built-in owner `agent` and the
 Local tool ceiling `vscode/askQuestions`, `execute/runInTerminal`, `read` within
 the owner's permissions. Stop if selection or required access is unverifiable.
-Do not delegate, switch models, or widen tools. On Agent Host, Local template
+Do not delegate or widen tools. On Agent Host, Local template
 variables and log locations are not guaranteed: require a confirmed workspace
 debug root and active session identity, or stop without creating an archive.
 

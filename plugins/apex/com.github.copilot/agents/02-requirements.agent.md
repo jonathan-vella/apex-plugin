@@ -1,7 +1,5 @@
 ---
 name: 02-Requirements
-model: ["Claude Opus 5.5 (copilot)"]
-reasoning-effort: high
 description: Researches and captures Azure platform engineering project requirements
 argument-hint: Describe the Azure workload or project you want to gather requirements for
 user-invocable: true

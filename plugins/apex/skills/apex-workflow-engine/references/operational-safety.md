@@ -13,7 +13,7 @@ not grant tools, change the active model, or select a recipient agent.
   JSON, fabricate completed steps, or treat reconstructed artifacts as review
   evidence. Frozen upstream files stay read-only.
 - Before any specialist step, stop and request manual selection of the exact
-  named owner with its configured model using the
+  named owner with its required tools using the
   [workflow entry contract](workflow-entry.md). Never execute a Sol step inline
   under MAI or invoke it as a MAI subagent.
 - A request for reviewer fan-out is not permission for unnamed default workers.
@@ -21,8 +21,8 @@ not grant tools, change the active model, or select a recipient agent.
   allowlist and actual harness. If these are unavailable, stop and report the
   independent review as blocked; do not simulate independent passes inline.
 - Workers use the [execution contract](execution-subagent.md): no user questions,
-  parent todos, nested delegation, or automatic model fallback. Explicit caller
-  allowlists control invocation despite recipient model-invocation flags.
+  parent todos, nested delegation, or automatic automatic fallback. Explicit caller
+  allowlists control invocation despite recipient invocation flagss.
 - Do not enable experimental nesting or context forks. Human approval and
   required review gates do not depend on preview scoped hooks.
 - Verify checks by actual results and distinguish static source evidence from

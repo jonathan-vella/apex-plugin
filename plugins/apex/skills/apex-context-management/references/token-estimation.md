@@ -46,19 +46,16 @@ instruction_cost = sum(matched_instruction_chars / 4)
 total_fixed = base_cost + tool_cost + handoff_cost + body_cost + instruction_cost
 ```
 
-## Model Context Limits
+## Selected Model Context Limits
 
-| Model                       | Vendor API window | APEX hard checkpoint |
-| --------------------------- | ----------------- | -------------------- |
-| GPT-6 Sol (copilot)         | 1,050,000 tokens  | ≥300K input          |
-| GPT-6 Luna (copilot)        | 1,050,000 tokens  | ≥300K input          |
-| GPT-5.6 Terra (copilot)     | 1,050,000 tokens  | ≥300K input          |
-| Claude Opus 5.5 (copilot)   | 1M tokens         | ≥160K input          |
-| Claude Sonnet 5.5 (copilot) | unknown           | ≥160K input          |
-| MAI-Code-1.1-Flash          | unknown           | ≥160K input          |
+| Source of limit | APEX action |
+| --------------- | ----------- |
+| Active harness reports a limit | Use it for checkpoint decisions |
+| Debug logs record sustained high input usage | Prefer `minimal` artifact tier before failure |
+| Limit is unknown | Treat headroom as unknown; do not infer from model names |
 
-Vendor windows are API limits from the OpenAI and Anthropic model pages, not Copilot harness limits. Use the
-active harness limit and measured tokenizer when available; otherwise keep limits and measured usage unknown.
+Vendor API windows are not Copilot harness limits. Use the active harness limit
+and measured tokenizer when available; otherwise keep limits and measured usage unknown.
 Checkpoints are defined in [hard-checkpoints.md](hard-checkpoints.md). Do not infer cost tiers from model names.
 
 ## Measurement Boundaries
