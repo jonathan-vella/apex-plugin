@@ -92,7 +92,7 @@ Done when:
   affected review/approval evidence; the caller must resolve required re-review before advancement.
 - Local uses human handoffs; Host requires explicit selection of the named next owner.
   This main agent is human-selected only, including fallback entry. Skills run inline
-  and cannot choose tools or models. Use the worker tool only for `rubber-duck` review calls.
+  and cannot choose agents or tools. Use the worker tool only for `rubber-duck` review calls.
   Tool names here are capabilities; per-harness mappings live in
   [`harness-compat.json`](../../tools/registry/harness-compat.json).
 - Use the artifact_type and review_focus lookup tables below.
@@ -165,8 +165,8 @@ Per Output Contract:
 
 Wanted stops:
 
-- Missing model/tool/input or worker eligibility returns `blocked`; no fallback model,
-  skipped required review or inline substitute. Load review guidance before review and
+- Missing tools, inputs or worker eligibility returns `blocked`; no skipped required
+  review or inline substitute. Load review guidance before review and
   decision guidance before the panel; recover missing/changed evidence after compaction.
 - Stop after the final aggregated gate resolves (`Revise` → apply +
   handoff, or `Proceed` → handoff). Do **not** auto-rerun the

@@ -36,7 +36,6 @@ This repo is APEX (Azure Agentic Platform Engineering eXperience). It contains:
 - Tests under `tools/tests/`
 - Registries: `tools/registry/agent-registry.json`,
   `tools/registry/count-manifest.json`,
-  retired model catalog references,
   `.github/skills/apex-vendor-prompting/rules.json`,
   `.github/skills/apex-workflow-engine/templates/workflow-graph.json`
 - Pre-commit + pre-push hooks via `lefthook.yml`
@@ -194,7 +193,6 @@ Sources of truth:
 - `tools/registry/agent-registry.json` (+ schema)
 - `tools/registry/count-manifest.json` (+ generator script)
 - `tools/registry/source-freshness.json`
-- retired model catalog generator references
 - `.github/skills/apex-vendor-prompting/rules.json`
 - `.github/skills/apex-workflow-engine/templates/workflow-graph.json`
 - `tools/schemas/*.schema.json`
@@ -258,10 +256,9 @@ work, not garbage).
 
 ## Phase 5 — Prompts
 
-Prompts targeting a custom agent must not declare `model:`; the named owner
-supplies it. Generic Local prompts may declare a model or inherit the picker.
-Operational Host entrypoints require verified owner/model selection. Verify
-these distinct contracts instead of assuming skill metadata binds a model.
+Prompts must not declare `model:`. Operational Host entrypoints require verified
+owner selection and required tools. Verify these contracts instead of assuming
+skill metadata binds an owner or grants tools.
 
 Domain report: `05-prompts.md`.
 

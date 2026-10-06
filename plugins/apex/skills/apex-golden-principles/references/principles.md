@@ -96,7 +96,7 @@ Does it only load more when needed?
 
 If a rule can be a linter check, CI validation, or pre-commit hook, make it one.
 Deterministic checks complement runtime role and approval rules; they do not prove
-harness attachment, model eligibility, semantic correctness, or human approval.
+harness attachment, worker availability, semantic correctness, or human approval.
 Artifact hooks and Challenger own artifact lint; agents do not invoke it directly.
 
 **Test**: For each documented rule, is there a corresponding validator in `scripts/` or

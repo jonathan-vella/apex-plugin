@@ -7,14 +7,14 @@ Local adapters bind the named agent in prompt frontmatter. Agent Host does not
 load Local prompt files or legacy configured prompt locations. A skill inherits
 the active session's model and tools; it cannot bind or switch an agent.
 
-Before any consequential action, require the user to select the exact named
-owner below and its model from that agent's current frontmatter. If the owner,
-model, or required tools cannot be verified, **STOP** and request manual owner
-selection in a new session. Do not continue under an inherited picker model.
-Do not add tools to compensate for missing access. Prompt tool overrides may
-only narrow the owning agent's permissions.
+The selected agent is the owner of the work it is named for below. When the
+requested operation belongs to a different owner, present the handoff and ask the
+user to select that owner, then **STOP**; do not do its work inline or run it as a subagent.
+A missing required tool or input blocks the work; inability to inspect agent
+definitions or the session model never does. Do not add tools to compensate
+for missing access. Prompt tool overrides may only narrow the owning agent's
+permissions.
 
-MAI must not invoke Sol agents as subagents or perform their work inline.
 The Orchestrator presents a human handoff and stops. Do not enable experimental
 nesting or `context: fork`; do not add fallback owners or tools.
 An explicit caller allowlist controls worker invocation, regardless of a
@@ -119,7 +119,7 @@ ask the user to choose the next step when the graph determines it.
 ## Harness Acceptance
 
 Native Agent Host support is manual and unverified. Static tests prove source
-contracts and names, not discovery, exact model availability, tool enforcement,
-or runtime handoff behavior. Test Local and Host fresh/resume/revision on both
+contracts and names, not discovery, tool enforcement, or runtime handoff
+behavior. Test Local and Host fresh/resume/revision on both
 IaC tracks, unavailable owners, approval stops, and missing review/input
 recovery manually. Do not claim successful native execution from these files.

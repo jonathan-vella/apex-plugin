@@ -3,7 +3,17 @@
 Each release of the `apex` plugin needs an entry here; `npm run publish:plugin` refuses to publish a version without
 one, and clients only update when the version changes.
 
-## [0.10.2] - Unreleased
+## [0.10.3] - Unreleased
+
+Agents no longer stop to verify the model or their own definitions.
+
+- In the 0.10.2 VS Code pilot (Auto), `01-Orchestrator` and `02-Requirements` stopped because the workflow entry
+  reference told them to verify the owner and its model. Skills, instructions and prompts now say: the selected agent
+  owns its step; a different step means a handoff; not being able to inspect agent definitions or the model never
+  blocks. Model-tier wording is gone from runtime guidance.
+- `validate:agents` fails when agent, skill, instruction or prompt files ask to verify, require or select a model.
+
+## [0.10.2] - 2026-10-06
 
 Agents run on the model you select.
 

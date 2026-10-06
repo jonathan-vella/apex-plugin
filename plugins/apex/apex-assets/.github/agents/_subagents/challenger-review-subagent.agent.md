@@ -56,8 +56,8 @@ with the `SKILL.md` path and a quote of the instruction.
   or inputs return an explicit failure to the parent, no fabricated findings or success.
   A read-only request conflicts with file-output mode: fail before writes; no new inline mode.
 - Local and Host callers supply the same explicit contract. Skills run inline and cannot
-  choose tools or models. The user-selected session model remains in effect; this worker
-  never authorizes a replacement model.
+  choose tools or agents. The user-selected session remains in effect; this worker
+  never authorizes a replacement runtime.
 - The output JSON file path MUST be supplied by the parent as `output_path`.
   Do not invent or guess a path. If `output_path` is missing, fail fast.
 - Atomic write: write to `{output_path}.tmp` and then rename to
@@ -105,7 +105,7 @@ current content and recover missing/changed evidence after compaction or source 
 
 Snapshot review inputs before analysis with
 `node tools/scripts/validate-challenger-findings.mjs --metadata <artifact_path>`.
-Retain that `cache_inputs` snapshot; the model comes from frontmatter, not a guessed runtime label.
+Retain that `cache_inputs` snapshot; runtime labels are caller observations, not cache inputs.
 Directory inputs use the deterministic tree hash documented in the review protocol; symlinks block hashing.
 Never hash a path string as if it were artifact bytes.
 
@@ -348,8 +348,8 @@ The on-disk JSON has no markdown wrapper:
     "checklists_sha": "<sha256 of adversarial-checklists.md bytes>",
     "protocol_sha": "<sha256 of adversarial-review-protocol.md bytes>",
     "subagent_sha": "<sha256 of challenger-review-subagent.agent.md bytes>",
-    "model": "<challenger-review-subagent.frontmatter.model[0]>",
-    "artifact_hash": "<sha256 of the concatenated string artifact_sha\\n---\\nchecklists_sha\\n---\\nprotocol_sha\\n---\\nsubagent_sha\\n---\\nmodel>"
+    "session_runtime": "<caller-provided runtime label or omitted when unavailable>",
+    "artifact_hash": "<sha256 of the concatenated string artifact_sha\\n---\\nchecklists_sha\\n---\\nprotocol_sha\\n---\\nsubagent_sha\\n---\\nsession_runtime>"
   }
 }
 ```

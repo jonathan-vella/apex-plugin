@@ -73,14 +73,14 @@ with the returned prompt exactly as given, then import the captured transcript w
 `apex/recordReview`. For ungated reviews, call `rubber-duck` with the artifact,
 lens and matching checklist inline. If `rubber-duck` is unavailable, the capture
 hook is inactive, `apex/recordReview` reports no captured transcript, permissions
-or model eligibility block the call, or the delegation capability is missing,
+or worker availability block the call, or the delegation capability is missing,
 **STOP** and request a human handoff to `10-Challenger`.
 
 Include the verbatim error, artifact path/type, review lens, pass and expected
 current evidence. Resume the parent only after current review evidence exists.
 `10-Challenger` is a human-selected main agent with `disable-model-invocation: true`,
 not a nested wrapper fallback. Do not invoke it as a subagent, widen caller allowlists,
-enable nested delegation, switch models automatically, write findings files by hand,
+enable nested delegation, change the selected runtime automatically, write findings files by hand,
 or synthesize an inline gated review. Legacy discovery settings are not a security
 boundary or evidence of runtime support.
 

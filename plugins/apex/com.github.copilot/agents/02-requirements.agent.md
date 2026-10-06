@@ -159,9 +159,9 @@ Match artifact length to the template and captured answers; no filler sections o
 ## Harness Routing
 
 Local uses human handoffs; Host requires the user to explicitly select the next named
-owner. Inline skills do not change model or tool scope. Use the worker tool only for the
-allowlisted worker. Missing model, tool, input or invocation eligibility means `blocked`,
-not model substitution or a skipped review. On reviewer failure, preserve the error and
+owner. Inline skills do not change tool scope or select agents. Use the worker tool only for the
+allowlisted worker. Missing tools, inputs or invocation eligibility mean `blocked`,
+not a skipped review. On reviewer failure, preserve the error and
 request a human transition to `10-Challenger`; never invoke that main agent as a worker.
 Never run Markdown lint on `agent-output/**`; the `artifact-validation` hook and Challenger own it.
 

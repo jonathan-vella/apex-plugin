@@ -17,7 +17,7 @@ Keep the independently required cost-feasibility review with `apex/reviewRequest
 and the built-in `rubber-duck` reviewer. If the active harness cannot invoke the
 declared worker, STOP and notify the user; never substitute a nested main-agent
 wrapper or parent-authored prices. Local prompt metadata is not an Agent Host
-routing contract; skills inherit the caller's selected model and tools and
+routing contract; skills run inside the caller's current session and tool scope and
 require explicit selection of the owning agent.
 
 ---
