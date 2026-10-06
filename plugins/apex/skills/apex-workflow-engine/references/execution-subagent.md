@@ -4,8 +4,8 @@
 This is a reference-only parent-to-worker contract, not an executable slash
 entrypoint. Copy the ordered Inputs, Activities, Outputs sections into the
 invocation of a named, explicitly allowlisted worker. The worker's own agent
-definition selects its model and tools; this reference grants no permissions.
-Do not invoke an unnamed default worker or infer model eligibility from a label.
+definition declares its tool contract; this reference grants no permissions.
+Do not invoke an unnamed default worker or infer worker availability from a label.
 Unavailable named workers or unsupported transitions require a return to the
 parent, not an automatic fallback, context fork, or nested delegation.
 

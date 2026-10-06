@@ -5,17 +5,16 @@ Apply this boundary before executing a retained utility procedure. Local prompt
 frontmatter remains the operation's routing contract; a shared reference does
 not grant tools, change the active model, or select a recipient agent.
 
-- Require current inputs and explicit scope. Missing tools, model evidence,
+- Require current inputs and explicit scope. Missing tools, owner evidence,
   source files, or user approvals block the operation. Report the blocker.
 - Preserve the operation's allowed output paths and read-only source boundaries.
   Read-only audits may write their declared reports, not the reviewed sources.
 - State flows through `apex` tools; never directly read/write session-state
   JSON, fabricate completed steps, or treat reconstructed artifacts as review
   evidence. Frozen upstream files stay read-only.
-- Before any specialist step, stop and request manual selection of the exact
-  named owner with its required tools using the
-  [workflow entry contract](workflow-entry.md). Never execute a Sol step inline
-  under MAI or invoke it as a MAI subagent.
+- Before any specialist step, stop and ask the user to select its named owner using the
+  [workflow entry contract](workflow-entry.md). Never execute a specialist step inline
+  or invoke its owner as a subagent.
 - A request for reviewer fan-out is not permission for unnamed default workers.
   Use only explicitly named, available reviewers permitted by the caller's
   allowlist and actual harness. If these are unavailable, stop and report the

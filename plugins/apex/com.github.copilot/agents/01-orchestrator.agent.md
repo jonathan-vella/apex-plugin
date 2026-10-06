@@ -162,7 +162,7 @@ chat can resume losslessly.
 Local: present the existing human handoff. Agent Host: ask the user to explicitly
 select the named next owner before continuing; prompt-file adapters are not available
 there. A skill runs inline with the current tools and cannot select an agent or model.
-Agents run on the user-selected model; never pick, switch, verify, or block on a model.
+Agents use the selected runtime; never change, verify, or block on it.
 If the required tool, question interface, or transition is unavailable, report
 `blocked` with the missing capability and stop. Do not silently skip a gate or substitute
 an agent. Preserve the checkpoint and mandatory session-break contract in both harnesses.
@@ -493,8 +493,8 @@ Do not require a session-state file before attempting recovery of existing work.
 
 ## Model Selection
 
-Agents do not define or enforce a model. They run on the user-selected
-client model, never block because of it, and never pick or switch models.
+Agents do not define or enforce a model. They use the selected runtime,
+never block because of it, and never change it.
 
 ## Boundaries
 
