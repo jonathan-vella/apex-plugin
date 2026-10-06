@@ -5,10 +5,6 @@
       "frontmatter": {
         "name": "01-Orchestrator",
         "description": "Master orchestrator for the multi-step Azure platform engineering workflow. Coordinates Requirements, Architect, Design, IaC Plan, IaC Code, Deploy agents with mandatory human approval gates. Routes Bicep or Terraform tracks via decisions.iac_tool.",
-        "model": [
-          "MAI-Code-1.1-Flash"
-        ],
-        "reasoning-effort": "medium",
         "argument-hint": "Describe the Azure platform engineering project you want to build end-to-end",
         "user-invocable": true,
         "disable-model-invocation": true,
@@ -134,10 +130,6 @@
       "path": ".github/agents/02-requirements.agent.md",
       "frontmatter": {
         "name": "02-Requirements",
-        "model": [
-          "Claude Opus 5.5 (copilot)"
-        ],
-        "reasoning-effort": "high",
         "description": "Researches and captures Azure platform engineering project requirements",
         "argument-hint": "Describe the Azure workload or project you want to gather requirements for",
         "user-invocable": true,
@@ -213,10 +205,6 @@
       "frontmatter": {
         "name": "03-Architect",
         "description": "Expert Architect providing guidance using Azure Well-Architected Framework principles and Microsoft best practices. Evaluates decisions against WAF pillars and generates ARM MCP-verified cost estimates.",
-        "model": [
-          "Claude Opus 5.5 (copilot)"
-        ],
-        "reasoning-effort": "high",
         "user-invocable": true,
         "disable-model-invocation": true,
         "agents": [
@@ -292,10 +280,6 @@
       "path": ".github/agents/04-design.agent.md",
       "frontmatter": {
         "name": "04-Design",
-        "model": [
-          "Claude Sonnet 5.5 (copilot)"
-        ],
-        "reasoning-effort": "medium",
         "description": "Step 3 — Design Artifacts. Generates code-based Python architecture diagrams and Architecture Decision Records for approved Azure designs. Optional step before governance and IaC planning.",
         "user-invocable": true,
         "disable-model-invocation": true,
@@ -362,10 +346,6 @@
       "frontmatter": {
         "name": "04g-Governance",
         "description": "Azure governance discovery agent. Queries Azure Policy assignments or imports the reference baseline, classifies effects, emits governance constraint artifacts, records governance_baseline, and routes to Architect.",
-        "model": [
-          "Claude Sonnet 5.5 (copilot)"
-        ],
-        "reasoning-effort": "medium",
         "argument-hint": "Discover governance constraints for a project",
         "user-invocable": true,
         "disable-model-invocation": true,
@@ -418,10 +398,6 @@
       "frontmatter": {
         "name": "05-IaC Planner",
         "description": "Expert Azure IaC planner that creates comprehensive machine-readable implementation plans. Consults Microsoft documentation, evaluates Azure Verified Modules (Bicep or Terraform), designs full infrastructure solutions with architecture diagrams. Routes by decisions.iac_tool.",
-        "model": [
-          "Claude Opus 5.5 (copilot)"
-        ],
-        "reasoning-effort": "high",
         "user-invocable": true,
         "disable-model-invocation": true,
         "agents": [],
@@ -497,10 +473,6 @@
       "frontmatter": {
         "name": "06-IaC CodeGen",
         "description": "Creates approved Azure IaC for the selected track. Reads iac_tool, loads Bicep or Terraform skills, validates with the merged worker, and emits Step 5 handoff artifacts.",
-        "model": [
-          "Claude Sonnet 5.5 (copilot)"
-        ],
-        "reasoning-effort": "medium",
         "user-invocable": true,
         "disable-model-invocation": true,
         "agents": [
@@ -572,10 +544,6 @@
       "path": ".github/agents/07-iac-deploy.agent.md",
       "frontmatter": {
         "name": "07-IaC Deploy",
-        "model": [
-          "Claude Sonnet 5.5 (copilot)"
-        ],
-        "reasoning-effort": "medium",
         "description": "Executes approved Azure deployments for the selected IaC track. Runs Bicep what-if or Terraform plan plus live policy precheck before explicit apply approval.",
         "argument-hint": "Deploy the approved IaC for a specific project",
         "user-invocable": true,
@@ -666,10 +634,6 @@
       "frontmatter": {
         "name": "08-As-Built",
         "description": "Generates Step 7 as-built documentation suite after successful deployment. Reads all prior artifacts (Steps 1-6) and deployed resource state to produce: design document, operations runbook, cost estimate, compliance matrix, backup/DR plan, resource inventory, and documentation index.",
-        "model": [
-          "Claude Sonnet 5.5 (copilot)"
-        ],
-        "reasoning-effort": "medium",
         "user-invocable": true,
         "disable-model-invocation": true,
         "agents": [
@@ -728,10 +692,6 @@
       "path": ".github/agents/09-diagnose.agent.md",
       "frontmatter": {
         "name": "09-Diagnose",
-        "model": [
-          "Claude Sonnet 5.5 (copilot)"
-        ],
-        "reasoning-effort": "medium",
         "description": "Interactive diagnostic agent that guides users through Azure resource health assessment, issue identification, and remediation planning. Scope-first execution with approval for every change, single-resource scope, reports to agent-output/{project}/.",
         "user-invocable": true,
         "disable-model-invocation": true,
@@ -793,10 +753,6 @@
       "frontmatter": {
         "name": "10-Challenger",
         "description": "Standalone adversarial review entry point. Runs gated reviews through apex/reviewRequest, rubber-duck, and apex/recordReview, or ungated rubber-duck reviews inline, then runs the Per-Finding Decision Protocol.",
-        "model": [
-          "Claude Opus 5.5 (copilot)"
-        ],
-        "reasoning-effort": "high",
         "argument-hint": "Provide the path to the artifact to challenge (e.g. agent-output/my-project/04-implementation-plan.md)",
         "user-invocable": true,
         "disable-model-invocation": true,
@@ -827,10 +783,6 @@
       "path": ".github/agents/11-context-optimizer.agent.md",
       "frontmatter": {
         "name": "11-Context Optimizer",
-        "model": [
-          "Claude Opus 5.5 (copilot)"
-        ],
-        "reasoning-effort": "high",
         "description": "Analyzes Copilot Chat debug logs to audit context-window utilization across agents. Identifies bloated prompts, redundant file reads, missing hand-off points, and wasted tokens. Produces actionable optimization reports. Recommendations only — never edits agents.",
         "user-invocable": true,
         "disable-model-invocation": true,
@@ -866,10 +818,6 @@
       "frontmatter": {
         "name": "challenger-review-subagent",
         "description": "Unified adversarial review subagent that challenges Azure infrastructure artifacts. Finds untested assumptions, governance gaps, WAF blind spots, and architectural weaknesses. Returns structured JSON findings. Supports single-pass and multi-pass rotating-lens reviews; batches lenses per invocation.",
-        "model": [
-          "GPT-6 Luna (copilot)"
-        ],
-        "reasoning-effort": "max",
         "disable-model-invocation": false,
         "user-invocable": false,
         "agents": [],
@@ -886,10 +834,6 @@
       "frontmatter": {
         "name": "cost-estimate-subagent",
         "description": "Azure cost estimation subagent. Uses Azure Resource Manager MCP retail pricing and cost data, then returns a structured cost breakdown through a file-based contract.",
-        "model": [
-          "GPT-6 Luna (copilot)"
-        ],
-        "reasoning-effort": "max",
         "user-invocable": false,
         "disable-model-invocation": false,
         "agents": [],
@@ -913,10 +857,6 @@
       "frontmatter": {
         "name": "iac-preview-subagent",
         "description": "IaC preview worker for Bicep or Terraform. Runs Bicep what-if or Terraform plan plus live Azure Policy precheck and returns preview summary with deterministic deploy gate.",
-        "model": [
-          "GPT-6 Luna (copilot)"
-        ],
-        "reasoning-effort": "max",
         "user-invocable": false,
         "disable-model-invocation": false,
         "agents": [],
@@ -936,10 +876,6 @@
       "frontmatter": {
         "name": "iac-validate-subagent",
         "description": "IaC validation worker for Bicep or Terraform. Runs track lint/build or fmt/validate, reviews AVM/AVM-TF, security, RBAC and governance, and returns the existing verdict contract.",
-        "model": [
-          "GPT-6 Luna (copilot)"
-        ],
-        "reasoning-effort": "max",
         "user-invocable": false,
         "disable-model-invocation": false,
         "agents": [],

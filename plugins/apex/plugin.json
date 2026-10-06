@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "apex",
-  "version": "0.10.1",
+  "version": "0.10.2",
   "description": "APEX: Azure platform engineering agents that take a project from requirements through architecture, governance, IaC and deployment, with review gates and tracked progress.",
   "author": {
     "name": "Jonathan Vella",

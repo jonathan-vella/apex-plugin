@@ -185,7 +185,7 @@ This block is a hard stop rule, not a recap.
   immediately followed by the worker call with the returned prompt.
 - An incomplete/failed prerequisite also blocks Phase 6. A runtime subagent error follows the
   Phase 6a fallback (human handoff to `10-Challenger`, then stop). Missing required
-  tools or model eligibility likewise blocks; do not attempt an inline review.
+  tools or tool eligibility likewise blocks; do not attempt an inline review.
 
 ## Phase 6: Challenger Review and Per-Finding Decision Panel
 
@@ -213,7 +213,7 @@ capture hook is inactive, `apex/recordReview` reports no captured transcript, or
 worker resolution error occurs, surface the verbatim error and present the existing
 `10-Challenger` handoff, then stop for the user to select it. `send: true` does not
 authorize automatic invocation. No inline review, fabricated findings or automatic
-model fallback is allowed. Resume only with current review evidence; a returned
+automatic fallback is allowed. Resume only with current review evidence; a returned
 handoff is not proof of success or human approval.
 
 ### 6b. Render findings table

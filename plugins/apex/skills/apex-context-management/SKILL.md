@@ -42,12 +42,11 @@ your need.
 
 ### Hard Token Checkpoints
 
-Percentages are advisory; absolute input-token counts override them.
-GPT-6 Sol/Luna and GPT-5.6 Terra hard-checkpoint at ≥300K input; Claude Opus 5.5, Claude Sonnet 5.5 and MAI-Code at ≥160K. When
-hit, emit a compaction message and prefer the `minimal` artifact tier.
+Percentages are advisory; active harness input-token limits override them. When
+the selected model approaches its observed limit, emit a compaction message and
+prefer the `minimal` artifact tier.
 Required missing guidance and safety evidence must still be recovered.
-These are repository trip-wires, not verified model API limits; use the
-active harness limit when known and do not infer it from a model name.
+Use the active harness limit when known and do not infer it from a model name.
 Full per-model table, checkpoint procedure, and
 background context (nordic-foods saturation event) in
 [`references/hard-checkpoints.md`](references/hard-checkpoints.md).

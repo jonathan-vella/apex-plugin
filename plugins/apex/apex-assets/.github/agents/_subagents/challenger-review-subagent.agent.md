@@ -1,8 +1,6 @@
 ---
 name: challenger-review-subagent
 description: "Unified adversarial review subagent that challenges Azure infrastructure artifacts. Finds untested assumptions, governance gaps, WAF blind spots, and architectural weaknesses. Returns structured JSON findings. Supports single-pass and multi-pass rotating-lens reviews; batches lenses per invocation."
-model: ["GPT-6 Luna (copilot)"]
-reasoning-effort: max
 disable-model-invocation: false
 user-invocable: false
 agents: []
@@ -54,12 +52,12 @@ with the `SKILL.md` path and a quote of the instruction.
   Never write challenged artifacts, decisions sidecars, recall or Azure state.
   Terminal access is not inherently read-only. Preserve unrelated user work and refuse
   a temporary sibling not owned by this invocation.
-- No user questions, todos, delegation or model fallback. Missing essential tools/model
+- No user questions, todos, delegation or automatic fallback. Missing essential tools
   or inputs return an explicit failure to the parent, no fabricated findings or success.
   A read-only request conflicts with file-output mode: fail before writes; no new inline mode.
 - Local and Host callers supply the same explicit contract. Skills run inline and cannot
-  choose model/tools. Runtime tier eligibility, including a Luna parent calling Terra,
-  is unverified until accepted manually; it never authorizes a replacement model.
+  choose tools or models. The user-selected session model remains in effect; this worker
+  never authorizes a replacement model.
 - The output JSON file path MUST be supplied by the parent as `output_path`.
   Do not invent or guess a path. If `output_path` is missing, fail fast.
 - Atomic write: write to `{output_path}.tmp` and then rename to

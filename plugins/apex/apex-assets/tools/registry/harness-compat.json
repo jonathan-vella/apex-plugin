@@ -1,11 +1,11 @@
 {
   "$schema": "../schemas/harness-compat.schema.json",
-  "description": "Copilot harness compatibility map for the feat/copilot-harness-only branch. Agent frontmatter stays canonical; this file declares how model labels, tool IDs and frontmatter fields translate to the GitHub Copilot SDK runtime and Copilot custom-agent profiles. Validated by tools/scripts/validate-harness-compat.mjs.",
+  "description": "Copilot harness compatibility map for the feat/copilot-harness-only branch. Agents run on the model selected by the user in the client; this file declares tool and frontmatter compatibility for the GitHub Copilot SDK runtime and Copilot custom-agent profiles. Validated by tools/scripts/validate-harness-compat.mjs.",
   "sdk": {
     "package": "@github/copilot-sdk",
     "version": "1.0.16",
     "runtime_version": "1.0.16",
-    "evidence": "Live SDK spike probes 1 and 2 (2026-10-01): model/effort, tool restriction, worker allowlist via onPreToolUse, ask_user, permissions and cold resume on 02-Requirements with challenger-review-subagent."
+    "evidence": "Live SDK spike probes 1 and 2 (2026-10-01): tool restriction, worker allowlist via onPreToolUse, ask_user, permissions and cold resume on 02-Requirements with challenger-review-subagent."
   },
   "frontmatter": {
     "portable": [
@@ -13,19 +13,21 @@
       "description",
       "target",
       "tools",
-      "model",
       "disable-model-invocation",
       "user-invocable",
       "mcp-servers",
       "metadata"
     ],
     "router_owned": {
-      "reasoning-effort": "Router passes it as SDK reasoningEffort; Copilot profiles cannot express it.",
       "agents": "Router denies non-listed task targets in onPreToolUse; infer:false alone does not prevent self-nesting.",
       "handoffs": "Ignored by Copilot clients; replaced by apex-recall checkpoints and router routing.",
       "argument-hint": "Ignored by Copilot clients; router CLI help carries invocation hints."
     },
-    "target_policy": "unset"
+    "target_policy": "unset",
+    "retired_forbidden": {
+      "model": "Retired: agents and prompts run on the model the user selects in the client.",
+      "reasoning-effort": "Retired: agents and prompts do not pin router-owned effort; the client-selected model/session owns runtime behavior."
+    }
   },
   "router_rules": {
     "excluded_builtin_agents": [
@@ -38,31 +40,7 @@
       "security-review",
       "rem-agent"
     ],
-    "deny_unlisted_task_targets": true,
-    "pin_allowed_models": true,
-    "verify_observed_model": true
-  },
-  "models": {
-    "Claude Opus 5.5 (copilot)": {
-      "sdk_id": "claude-opus-5.5",
-      "verification": "exercised",
-      "efforts": ["low", "medium", "high", "xhigh", "max"]
-    },
-    "Claude Sonnet 5.5 (copilot)": {
-      "sdk_id": "claude-sonnet-5.5",
-      "verification": "listed",
-      "efforts": ["low", "medium", "high", "xhigh", "max"]
-    },
-    "GPT-6 Luna (copilot)": {
-      "sdk_id": "gpt-6-luna",
-      "verification": "exercised",
-      "efforts": ["none", "low", "medium", "high", "xhigh", "max"]
-    },
-    "MAI-Code-1.1-Flash": {
-      "sdk_id": "mai-code-1.1-flash",
-      "verification": "listed",
-      "efforts": ["low", "medium", "high"]
-    }
+    "deny_unlisted_task_targets": true
   },
   "tools": {
     "agent": {

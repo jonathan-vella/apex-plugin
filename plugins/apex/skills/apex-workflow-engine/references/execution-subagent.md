@@ -36,7 +36,7 @@ Do not widen the recipient's tool permissions through the invocation text.
 Workers execute only the assigned slice. They do not ask the user questions,
 manage parent todos, dispatch subagents, or edit upstream inputs. Missing or
 stale inputs require a targeted permitted read or return to the parent.
-If the required tool, model, approval, or input is unavailable, stop and return
+If the required tool, approval, or input is unavailable, stop and return
 the named worker's failure shape with the missing evidence; do not replace its
 enum with a generic BLOCKED verdict. The parent owns recovery and user questions.
 
@@ -107,7 +107,7 @@ matching checklist inline. Inline findings do not imply a findings-file write.
 
 Return command failures with the verbatim error, attempted activity, partial
 output paths, and a next action for the parent. Do not fabricate success or
-silently substitute tools, models, SKUs, or regions. Keep retries within the
+silently substitute tools, SKUs, or regions. Keep retries within the
 recipient's existing bounded retry policy; do not add a new retry budget here.
 
 For parent recovery, consult

@@ -27452,6 +27452,2015 @@ ${"\u2500".repeat(50)}`);
   }
 };
 
+// tools/scripts/_lib/review-transcript.mjs
+import { createHash as createHash2, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+var REVIEW_SCHEMA = "1.1";
+var REVIEWER = "rubber-duck";
+var REQUEST_SCHEMA = "apex-review-request-v1";
+var TRANSCRIPT_SCHEMA = "apex-review-transcript-v1";
+var REVIEWS_DIR = ".reviews";
+var NONCE_PATTERN = /^[0-9a-f]{16}$/;
+var REQUEST_FILE_PATTERN = /^request-([0-9a-f]{16})\.json$/;
+var TRANSCRIPT_FILE_PATTERN = /^rubber-duck-([0-9a-f]{16})-([0-9a-f]{12})\.md$/;
+var VALID_SEVERITY = /* @__PURE__ */ new Set(["must_fix", "should_fix", "suggestion"]);
+var VALID_ASSESSMENT = /* @__PURE__ */ new Set(["APPROVED", "NEEDS_REVISION", "BLOCKED"]);
+var VALID_RISK = /* @__PURE__ */ new Set(["high", "medium", "low"]);
+var FINDING_TEXT_FIELDS = ["category", "claim", "evidence", "impact", "artifact_section"];
+var sha256 = (value) => createHash2("sha256").update(value).digest("hex");
+function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+function reviewKeyFile(env = process.env) {
+  return env.APEX_REVIEW_KEY_FILE || path.join(os.homedir(), ".apex", "review-key");
+}
+function reviewKey({ env = process.env, create = true } = {}) {
+  const file = reviewKeyFile(env);
+  try {
+    return Buffer.from(fs.readFileSync(file, "utf8").trim(), "hex");
+  } catch (error2) {
+    if (error2.code !== "ENOENT" || !create) throw new Error(`Review key unavailable at ${file}`, { cause: error2 });
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 448 });
+  try {
+    fs.writeFileSync(file, `${randomBytes(32).toString("hex")}
+`, { flag: "wx", mode: 384 });
+  } catch (error2) {
+    if (error2.code !== "EEXIST") throw error2;
+  }
+  return Buffer.from(fs.readFileSync(file, "utf8").trim(), "hex");
+}
+function sign(record2, key) {
+  const { signature: _ignored, ...body } = record2;
+  return createHmac("sha256", key).update(canonicalJson(body)).digest("hex");
+}
+function verifySignature(record2, key) {
+  if (typeof record2?.signature !== "string" || !/^[0-9a-f]{64}$/.test(record2.signature)) return false;
+  const expected = Buffer.from(sign(record2, key), "hex");
+  return timingSafeEqual(expected, Buffer.from(record2.signature, "hex"));
+}
+function findingId(finding3) {
+  return sha256([finding3.category, finding3.claim, finding3.artifact_section].join("|")).slice(0, 8);
+}
+function parseReviewPayload(transcript) {
+  const blocks2 = [...String(transcript).matchAll(/```json[^\n]*\n([\s\S]*?)\n```/g)];
+  if (!blocks2.length) return { error: "the transcript has no ```json block with the review result" };
+  let payload;
+  try {
+    payload = JSON.parse(blocks2.at(-1)[1]);
+  } catch (error2) {
+    return { error: `the review result JSON does not parse (${error2.message})` };
+  }
+  const problems = [];
+  if (!payload || typeof payload !== "object") return { error: "the review result is not a JSON object" };
+  if (!VALID_ASSESSMENT.has(payload.overall_assessment)) problems.push("overall_assessment");
+  if (!VALID_RISK.has(payload.risk_level)) problems.push("risk_level");
+  if (!Array.isArray(payload.findings)) problems.push("findings");
+  for (const [index, finding3] of (Array.isArray(payload.findings) ? payload.findings : []).entries()) {
+    if (!finding3 || typeof finding3 !== "object") {
+      problems.push(`findings[${index}]`);
+      continue;
+    }
+    if (!VALID_SEVERITY.has(finding3.severity)) problems.push(`findings[${index}].severity`);
+    for (const field of FINDING_TEXT_FIELDS) {
+      if (typeof finding3[field] !== "string" || !finding3[field].trim()) problems.push(`findings[${index}].${field}`);
+    }
+    if (finding3.severity === "must_fix" && typeof finding3.suggested_fix?.proposed_edit !== "string") {
+      problems.push(`findings[${index}].suggested_fix.proposed_edit`);
+    }
+  }
+  if (problems.length) return { error: `the review result is missing or has invalid: ${problems.join(", ")}` };
+  return { payload };
+}
+function buildSidecar({ request, transcriptPath, transcriptText, requestPath, guidance }) {
+  const parsed = parseReviewPayload(transcriptText);
+  if (parsed.error) throw new Error(parsed.error);
+  const { payload } = parsed;
+  const findings = payload.findings.map((raw) => {
+    const finding3 = {
+      severity: raw.severity,
+      category: raw.category.trim(),
+      claim: raw.claim.trim(),
+      evidence: raw.evidence.trim(),
+      impact: raw.impact.trim(),
+      artifact_section: raw.artifact_section.trim(),
+      traces_to: Array.isArray(raw.traces_to) ? raw.traces_to.filter((item) => typeof item === "string") : []
+    };
+    if (raw.suggested_fix && typeof raw.suggested_fix === "object") {
+      finding3.suggested_fix = {
+        artifact_path: typeof raw.suggested_fix.artifact_path === "string" && raw.suggested_fix.artifact_path.trim() ? raw.suggested_fix.artifact_path.trim() : request.artifact,
+        proposed_edit: String(raw.suggested_fix.proposed_edit ?? "")
+      };
+    }
+    if (typeof raw.requires_step === "string" && raw.requires_step.trim()) finding3.requires_step = raw.requires_step;
+    return { id: findingId(finding3), ...finding3 };
+  });
+  const count = (severity) => findings.filter((finding3) => finding3.severity === severity).length;
+  const cache2 = {
+    artifact_sha: request.artifact_sha256,
+    checklists_sha: guidance.checklists_sha,
+    protocol_sha: guidance.protocol_sha,
+    reviewer: REVIEWER
+  };
+  return {
+    schema_version: REVIEW_SCHEMA,
+    reviewer: REVIEWER,
+    challenged_artifact: request.artifact,
+    artifact_type: request.artifact_type,
+    review_focus: request.review_focus,
+    pass_number: request.pass_number,
+    overall_assessment: payload.overall_assessment,
+    risk_level: payload.risk_level,
+    challenge_summary: typeof payload.summary === "string" ? payload.summary.trim() : "",
+    must_fix_count: count("must_fix"),
+    should_fix_count: count("should_fix"),
+    suggestion_count: count("suggestion"),
+    findings,
+    review_request: { path: requestPath, nonce: request.nonce, prompt_sha256: request.prompt_sha256 },
+    transcript: { path: transcriptPath, sha256: sha256(transcriptText), request_sha256: request.prompt_sha256 },
+    cache_inputs: { ...cache2, artifact_hash: sha256(Object.values(cache2).join("\n---\n")) }
+  };
+}
+var serializeSidecar = (sidecar) => `${JSON.stringify(sidecar, null, 2)}
+`;
+function assertPlainDirectories(root, dir) {
+  const relative = path.relative(root, dir);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`${dir} is outside ${root}`);
+  let current = root;
+  for (const part of relative.split(path.sep).filter(Boolean)) {
+    current = path.join(current, part);
+    const stat = fs.lstatSync(current);
+    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Not a plain folder: ${current}`);
+  }
+}
+function readRegularFile(file) {
+  const stat = fs.lstatSync(file);
+  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Not a regular file: ${file}`);
+  return fs.readFileSync(file);
+}
+function projectOf(relative) {
+  const parts = String(relative).split("/");
+  return parts[0] === "agent-output" && parts.length >= 3 && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(parts[1]) ? parts[1] : null;
+}
+function verifyTranscriptReview(sidecarFile, doc, { root, guidance, artifactSha: artifactSha2, key }) {
+  const problems = [];
+  const fail = (message) => problems.push(message);
+  const project = projectOf(doc.challenged_artifact);
+  if (!project) return [`challenged_artifact must be agent-output/<project>/<file> (got ${doc.challenged_artifact})`];
+  if (doc.reviewer !== REVIEWER) fail(`reviewer must be "${REVIEWER}"`);
+  const reviewsRel = `agent-output/${project}/${REVIEWS_DIR}`;
+  const transcriptRel = doc.transcript?.path;
+  const requestRel = doc.review_request?.path;
+  const transcriptName = typeof transcriptRel === "string" ? transcriptRel.slice(reviewsRel.length + 1) : "";
+  const requestName = typeof requestRel === "string" ? requestRel.slice(reviewsRel.length + 1) : "";
+  if (!transcriptRel?.startsWith(`${reviewsRel}/`) || !TRANSCRIPT_FILE_PATTERN.test(transcriptName)) {
+    return [...problems, `transcript.path must be ${reviewsRel}/rubber-duck-<nonce>-<hash>.md`];
+  }
+  if (!requestRel?.startsWith(`${reviewsRel}/`) || !REQUEST_FILE_PATTERN.test(requestName)) {
+    return [...problems, `review_request.path must be ${reviewsRel}/request-<nonce>.json`];
+  }
+  const reviewsDir = path.join(root, "agent-output", project, REVIEWS_DIR);
+  let request;
+  let meta2;
+  let transcriptText;
+  try {
+    assertPlainDirectories(root, reviewsDir);
+    request = JSON.parse(readRegularFile(path.join(reviewsDir, requestName)).toString("utf8"));
+    const transcriptBytes = readRegularFile(path.join(reviewsDir, transcriptName));
+    transcriptText = transcriptBytes.toString("utf8");
+    meta2 = JSON.parse(
+      readRegularFile(path.join(reviewsDir, transcriptName.replace(/\.md$/, ".json"))).toString("utf8")
+    );
+    if (sha256(transcriptBytes) !== doc.transcript.sha256) fail("transcript bytes do not match transcript.sha256");
+  } catch (error2) {
+    return [...problems, `review evidence unreadable: ${error2.message}`];
+  }
+  const nonce = REQUEST_FILE_PATTERN.exec(requestName)[1];
+  if (request.schema !== REQUEST_SCHEMA || !verifySignature(request, key)) fail("review request signature is invalid");
+  if (meta2.schema !== TRANSCRIPT_SCHEMA || !verifySignature(meta2, key))
+    fail("transcript metadata signature is invalid");
+  if (request.nonce !== nonce || meta2.nonce !== nonce || TRANSCRIPT_FILE_PATTERN.exec(transcriptName)[1] !== nonce) {
+    fail("transcript, metadata and request do not share one nonce");
+  }
+  if (request.project !== project || meta2.project !== project) fail("review evidence belongs to another project");
+  if (request.artifact !== doc.challenged_artifact || meta2.artifact !== doc.challenged_artifact) {
+    fail("review evidence belongs to another artifact");
+  }
+  if (meta2.transcript !== transcriptName) fail("transcript metadata names another file");
+  if (meta2.response_sha256 !== doc.transcript.sha256) fail("transcript metadata hash does not match");
+  if (meta2.request_sha256 !== request.prompt_sha256 || doc.transcript.request_sha256 !== request.prompt_sha256) {
+    fail("the reviewed prompt is not the issued review request");
+  }
+  if (meta2.artifact_sha256 !== request.artifact_sha256) fail("the reviewer saw another version of the artifact");
+  if (artifactSha2 !== request.artifact_sha256) fail("the artifact changed after the review; request a new review");
+  for (const field of ["artifact_type", "review_focus", "pass_number"]) {
+    if (request[field] !== doc[field]) fail(`${field} does not match the review request`);
+  }
+  if (path.basename(sidecarFile) !== request.sidecar) fail("the sidecar file name does not match the review request");
+  if (problems.length) return problems;
+  try {
+    const expected = buildSidecar({
+      request,
+      transcriptPath: transcriptRel,
+      transcriptText,
+      requestPath: requestRel,
+      guidance
+    });
+    if (canonicalJson(expected) !== canonicalJson(doc)) {
+      fail("the sidecar does not match the findings in its transcript; record it again with recordReview");
+    }
+  } catch (error2) {
+    fail(`the transcript cannot be imported: ${error2.message}`);
+  }
+  const projectDir2 = path.dirname(reviewsDir);
+  for (const name of fs.readdirSync(projectDir2).sort()) {
+    if (!/^challenge-findings-.*\.json$/.test(name) || name.endsWith("-decisions.json")) continue;
+    if (path.resolve(projectDir2, name) === path.resolve(sidecarFile) || name === request.sidecar) continue;
+    try {
+      const other = JSON.parse(fs.readFileSync(path.join(projectDir2, name), "utf8"));
+      if (other?.transcript?.path === transcriptRel) fail(`the transcript is already cited by ${name}`);
+    } catch {
+    }
+  }
+  return problems;
+}
+
+// tools/scripts/validate-challenger-findings.mjs
+var ROOT = "agent-output";
+var REQUIRED_TOP_LEVEL = [
+  "schema_version",
+  "challenged_artifact",
+  "artifact_type",
+  "review_focus",
+  "pass_number",
+  "risk_level",
+  "must_fix_count",
+  "should_fix_count",
+  "suggestion_count",
+  "findings",
+  "cache_inputs"
+];
+var REQUIRED_FINDING_FIELDS = [
+  "id",
+  "severity",
+  "category",
+  "claim",
+  "evidence",
+  "impact",
+  "artifact_section",
+  "traces_to"
+];
+var REQUIRED_CACHE_FIELDS = ["artifact_sha", "checklists_sha", "protocol_sha", "subagent_sha", "artifact_hash"];
+var REQUIRED_CACHE_FIELDS_V11 = ["artifact_sha", "checklists_sha", "protocol_sha", "reviewer", "artifact_hash"];
+var SUPPORTED_SCHEMAS = /* @__PURE__ */ new Set(["1.0", "1.1"]);
+var WORKER_GUIDANCE = ".github/agents/_subagents/challenger-review-subagent.agent.md";
+var CHECKLISTS_GUIDANCE = ".github/skills/apex-azure-defaults/references/adversarial-checklists.md";
+var PROTOCOL_GUIDANCE = ".github/skills/apex-azure-defaults/references/adversarial-review-protocol.md";
+var VALID_SEVERITY2 = /* @__PURE__ */ new Set(["must_fix", "should_fix", "suggestion"]);
+var r;
+function findingId2(finding3) {
+  for (const field of ["category", "claim", "artifact_section"]) {
+    if (typeof finding3?.[field] !== "string" || !finding3[field]) {
+      throw new Error(`Finding identity requires ${field}`);
+    }
+  }
+  return createHash3("sha256").update([finding3.category, finding3.claim, finding3.artifact_section].join("|")).digest("hex").slice(0, 8);
+}
+function artifactSha(artifactPath2, root = process.cwd()) {
+  const hash = (bytes) => createHash3("sha256").update(bytes).digest("hex");
+  const artifact = path2.resolve(root, artifactPath2);
+  const entries = [];
+  const ignored = /* @__PURE__ */ new Set([".git", ".terraform", "node_modules", ".venv", "__pycache__"]);
+  const visit = (target) => {
+    const stat = fs2.lstatSync(target);
+    if (stat.isSymbolicLink()) throw new Error(`Review artifacts cannot contain symlinks: ${target}`);
+    if (stat.isDirectory()) {
+      for (const name of fs2.readdirSync(target).sort()) {
+        if (!ignored.has(name)) visit(path2.join(target, name));
+      }
+    } else if (stat.isFile()) {
+      entries.push([path2.relative(artifact, target).split(path2.sep).join("/"), hash(fs2.readFileSync(target))]);
+    } else throw new Error(`Unsupported review artifact: ${target}`);
+  };
+  visit(artifact);
+  if (!entries.length) throw new Error("Review artifact directory contains no files");
+  return fs2.lstatSync(artifact).isDirectory() ? hash(JSON.stringify(entries)) : entries[0][1];
+}
+function guidanceHashes(guidanceRoot = process.cwd()) {
+  const hash = (relative) => createHash3("sha256").update(fs2.readFileSync(path2.resolve(guidanceRoot, relative))).digest("hex");
+  return { checklists_sha: hash(CHECKLISTS_GUIDANCE), protocol_sha: hash(PROTOCOL_GUIDANCE) };
+}
+function cacheInputs(artifactPath2, root = process.cwd(), guidanceRoot = root) {
+  const read = (relative) => fs2.readFileSync(path2.resolve(guidanceRoot, relative));
+  const hash = (bytes) => createHash3("sha256").update(bytes).digest("hex");
+  const artifactShaValue = artifactSha(artifactPath2, root);
+  if (!fs2.existsSync(path2.resolve(guidanceRoot, WORKER_GUIDANCE))) {
+    throw new Error(
+      "legacy schema 1.0 review cannot be verified here (the challenger-review-subagent worker is not installed); run a new review"
+    );
+  }
+  const worker = read(WORKER_GUIDANCE);
+  const inputs = {
+    artifact_sha: artifactShaValue,
+    checklists_sha: hash(read(CHECKLISTS_GUIDANCE)),
+    protocol_sha: hash(read(PROTOCOL_GUIDANCE)),
+    subagent_sha: hash(worker)
+  };
+  return { ...inputs, artifact_hash: hash(Object.values(inputs).join("\n---\n")) };
+}
+function verifyTranscriptCache(file, doc, root, guidanceRoot) {
+  const guidance = guidanceHashes(guidanceRoot);
+  const current = artifactSha(doc.challenged_artifact, root);
+  for (const [field, value] of Object.entries({ artifact_sha: current, ...guidance, reviewer: REVIEWER })) {
+    if (doc.cache_inputs?.[field] !== value) r.error(`${file}: stale cache_inputs.${field}`);
+  }
+  let key;
+  try {
+    key = reviewKey({ create: false });
+  } catch (error2) {
+    r.error(`${file}: ${error2.message}; transcript-backed reviews cannot be verified`);
+    return;
+  }
+  const problems = verifyTranscriptReview(path2.resolve(root, file), doc, {
+    root: path2.resolve(root),
+    guidance,
+    artifactSha: current,
+    key
+  });
+  for (const problem3 of problems) r.error(`${file}: ${problem3}`);
+}
+function verifyCache(file, doc, root = process.cwd(), guidanceRoot = root) {
+  if (doc.schema_version === "1.1") {
+    verifyTranscriptCache(file, doc, root, guidanceRoot);
+    return;
+  }
+  const expected = cacheInputs(doc.challenged_artifact, root, guidanceRoot);
+  for (const [field, value] of Object.entries(expected)) {
+    if (doc.cache_inputs?.[field] !== value) r.error(`${file}: stale cache_inputs.${field}`);
+  }
+  if (doc.supporting_inputs !== void 0) {
+    if (!Array.isArray(doc.supporting_inputs) || doc.supporting_inputs.length === 0) {
+      r.error(`${file}: supporting_inputs must be a nonempty array when declared`);
+    } else {
+      const seen = /* @__PURE__ */ new Set();
+      for (const input of doc.supporting_inputs) {
+        try {
+          if (!input || typeof input.path !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256 || "")) {
+            throw new Error("invalid supporting input record");
+          }
+          const resolved = path2.resolve(root, input.path);
+          if (seen.has(resolved)) throw new Error("duplicate supporting input");
+          seen.add(resolved);
+          if (cacheInputs(input.path, root, guidanceRoot).artifact_sha !== input.sha256) {
+            throw new Error("supporting bytes changed");
+          }
+        } catch (error2) {
+          r.error(`${file}: invalid supporting input: ${error2.message}`);
+        }
+      }
+    }
+  }
+  for (const [index, finding3] of doc.findings.entries()) {
+    if (finding3.id !== findingId2(finding3)) r.error(`${file}: findings[${index}].id does not match identity`);
+  }
+  for (const severity of VALID_SEVERITY2) {
+    const count = doc.findings.filter((finding3) => finding3.severity === severity).length;
+    if (doc[`${severity}_count`] !== count) r.error(`${file}: ${severity}_count does not match findings`);
+  }
+}
+function walk(dir, acc = []) {
+  if (!fs2.existsSync(dir)) return acc;
+  for (const entry of fs2.readdirSync(dir, { withFileTypes: true })) {
+    const full = path2.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === "_meta") continue;
+      walk(full, acc);
+    } else if (entry.isFile() && entry.name.startsWith("challenge-findings-") && entry.name.endsWith(".json") && !entry.name.endsWith("-decisions.json")) {
+      acc.push(full);
+    }
+  }
+  return acc;
+}
+function isNonEmptyString(v) {
+  return typeof v === "string" && v.length > 0;
+}
+function validateFinding(file, finding3, idx) {
+  const where = `${file} findings[${idx}]`;
+  for (const f of REQUIRED_FINDING_FIELDS) {
+    if (!(f in finding3)) {
+      r.error(`${where}: missing required field "${f}"`);
+    }
+  }
+  if (!VALID_SEVERITY2.has(finding3.severity)) {
+    r.error(`${where}: severity "${finding3.severity}" is not one of ${[...VALID_SEVERITY2].join(", ")}`);
+  }
+  if (!Array.isArray(finding3.traces_to)) {
+    r.error(`${where}: traces_to must be an array (got ${typeof finding3.traces_to})`);
+  }
+  if (finding3.severity === "must_fix") {
+    const sf = finding3.suggested_fix;
+    if (!sf || typeof sf !== "object") {
+      r.error(`${where}: must_fix findings require a suggested_fix object`);
+    } else {
+      if (!isNonEmptyString(sf.artifact_path)) {
+        r.error(`${where}: suggested_fix.artifact_path missing or empty`);
+      }
+      if (!isNonEmptyString(sf.proposed_edit)) {
+        r.error(`${where}: suggested_fix.proposed_edit missing or empty`);
+      }
+    }
+  }
+  if (finding3.requires_step !== void 0 && !isNonEmptyString(finding3.requires_step)) {
+    r.error(`${where}: requires_step, when present, must be a non-empty string`);
+  }
+}
+function validateFindings(file, doc) {
+  if (doc?.batch_results !== void 0) {
+    const entries = Array.isArray(doc.batch_results) ? doc.batch_results : [];
+    if (doc.schema_version === "1.1" || entries.some((entry) => entry?.schema_version === "1.1")) {
+      r.error(`${file}: schema 1.1 reviews are single-lens; batch_results is not allowed`);
+      return;
+    }
+  }
+  if (Array.isArray(doc.batch_results)) {
+    for (const [i, entry] of doc.batch_results.entries()) {
+      validateFindings(`${file} batch_results[${i}]`, entry);
+    }
+    return;
+  }
+  for (const f of REQUIRED_TOP_LEVEL) {
+    if (!(f in doc)) {
+      r.error(`${file}: missing required top-level field "${f}"`);
+    }
+  }
+  if (!SUPPORTED_SCHEMAS.has(doc.schema_version)) {
+    r.error(`${file}: schema_version must be "1.0" or "1.1" (got ${JSON.stringify(doc.schema_version)})`);
+  }
+  if (doc.schema_version === "1.1") {
+    if (Array.isArray(doc.batch_results))
+      r.error(`${file}: schema 1.1 reviews are single-lens; batch_results is not allowed`);
+    if (doc.reviewer !== REVIEWER) r.error(`${file}: reviewer must be "${REVIEWER}"`);
+    for (const [object2, fields] of [
+      ["transcript", ["path", "sha256", "request_sha256"]],
+      ["review_request", ["path", "nonce", "prompt_sha256"]]
+    ]) {
+      for (const field of fields) {
+        if (!isNonEmptyString(doc[object2]?.[field])) r.error(`${file}: ${object2}.${field} missing or empty`);
+      }
+    }
+  }
+  if (!Array.isArray(doc.findings)) {
+    r.error(`${file}: findings must be an array`);
+  } else {
+    for (const [i, finding3] of doc.findings.entries()) {
+      validateFinding(file, finding3, i);
+    }
+  }
+  if (doc.cache_inputs && typeof doc.cache_inputs === "object") {
+    for (const f of doc.schema_version === "1.1" ? REQUIRED_CACHE_FIELDS_V11 : REQUIRED_CACHE_FIELDS) {
+      if (!isNonEmptyString(doc.cache_inputs[f])) {
+        r.error(`${file}: cache_inputs.${f} missing or empty`);
+      }
+    }
+  }
+}
+function verifyReviewFile(file, { root = process.cwd(), guidanceRoot = root } = {}) {
+  const errors = [];
+  const previous = r;
+  r = { error: (...parts) => errors.push(parts.join(": ")), warn() {
+  } };
+  try {
+    const doc = JSON.parse(fs2.readFileSync(path2.resolve(root, file), "utf-8"));
+    validateFindings(file, doc);
+    const entries = Array.isArray(doc.batch_results) ? doc.batch_results : [doc];
+    if (entries.length === 0) throw new Error("Empty batch cannot prove a current review");
+    for (const entry of entries) verifyCache(file, entry, root, guidanceRoot);
+  } catch (error2) {
+    errors.push(`${file}: invalid findings payload (${error2.message})`);
+  } finally {
+    r = previous;
+  }
+  return errors;
+}
+function runValidator(args = process.argv.slice(2)) {
+  r = new Reporter("Challenger Findings Validator");
+  const files = /* @__PURE__ */ new Set();
+  let verifyCurrent = false;
+  try {
+    const { values, positionals } = parseArgs({
+      args,
+      options: {
+        root: { type: "string" },
+        path: { type: "string", multiple: true },
+        metadata: { type: "string" },
+        "finding-ids": { type: "string" },
+        "verify-cache": { type: "boolean" },
+        "supporting-input": { type: "string", multiple: true },
+        help: { type: "boolean" }
+      },
+      allowPositionals: true
+    });
+    if (values.help) {
+      console.log(
+        "Usage: validate-challenger-findings.mjs [--root DIR | --path FILE | FILE ...] [--verify-cache]\nRead-only metadata: --metadata ARTIFACT [--supporting-input PATH ...] [--finding-ids DRAFT.json.tmp]\nMetadata hashes file bytes or sorted directory entries using reviewer and protocol artifacts.\nUse --verify-cache for current review gates, not historical schema-only scans."
+      );
+      return 0;
+    }
+    if (values.metadata !== void 0 || values["finding-ids"] !== void 0) {
+      if (values.root !== void 0 || values.path || positionals.length || values["verify-cache"]) {
+        throw new Error("Metadata output cannot be combined with validation inputs");
+      }
+      const metadata = {};
+      if (values.metadata !== void 0) metadata.cache_inputs = cacheInputs(values.metadata);
+      if (values["supporting-input"]) {
+        if (values.metadata === void 0) throw new Error("--supporting-input requires --metadata");
+        metadata.supporting_inputs = [...new Set(values["supporting-input"])].map((input) => ({
+          path: input,
+          sha256: cacheInputs(input).artifact_sha
+        }));
+      }
+      if (values["finding-ids"] !== void 0) {
+        const draft = JSON.parse(fs2.readFileSync(values["finding-ids"], "utf8"));
+        const identities = (entry) => entry.findings.map((finding3, index) => ({ index, id: findingId2(finding3) }));
+        if (Array.isArray(draft.batch_results)) metadata.batch_results = draft.batch_results.map(identities);
+        else metadata.finding_ids = identities(draft);
+      }
+      console.log(JSON.stringify(metadata, null, 2));
+      return 0;
+    }
+    if (values["supporting-input"]) throw new Error("--supporting-input requires --metadata");
+    verifyCurrent = values["verify-cache"] ?? false;
+    const requested = [...values.path ?? [], ...positionals];
+    if (values.root !== void 0) requested.unshift(values.root);
+    if (requested.length === 0) {
+      for (const file of walk(ROOT)) files.add(file);
+    } else {
+      for (const target of requested) {
+        try {
+          if (!target) throw new Error("input path must not be empty");
+          const stat = fs2.statSync(target);
+          if (target === values.root && !stat.isDirectory()) {
+            throw new Error("--root must be a directory");
+          }
+          if (stat.isFile()) {
+            files.add(path2.resolve(target));
+          } else if (stat.isDirectory()) {
+            for (const file of walk(target)) files.add(path2.resolve(file));
+          } else {
+            throw new Error("input must be a regular file or directory");
+          }
+        } catch (error2) {
+          r.error(target, `cannot inspect input (${error2.message})`);
+        }
+      }
+    }
+  } catch (error2) {
+    r.error(`Invalid arguments or scan failure: ${error2.message}`);
+  }
+  if (files.size === 0 && r.errors === 0) {
+    console.log("  \u26A0\uFE0F  No challenger findings sidecars found in scan directories \u2014 nothing to validate.\n");
+  }
+  for (const file of files) {
+    let raw;
+    try {
+      raw = fs2.readFileSync(file, "utf-8");
+    } catch (e) {
+      r.error(`${file}: cannot read (${e.message})`);
+      continue;
+    }
+    let doc;
+    try {
+      doc = JSON.parse(raw);
+    } catch (e) {
+      r.error(`${file}: invalid JSON (${e.message})`);
+      continue;
+    }
+    try {
+      validateFindings(file, doc);
+      if (verifyCurrent) {
+        const entries = Array.isArray(doc.batch_results) ? doc.batch_results : [doc];
+        if (entries.length === 0) throw new Error("Empty batch cannot prove a current review");
+        for (const entry of entries) verifyCache(file, entry);
+      }
+    } catch (error2) {
+      r.error(`${file}: invalid findings payload (${error2.message})`);
+    }
+  }
+  console.log(`  Scanned ${files.size} findings sidecar(s)`);
+  if (verifyCurrent && files.size === 0) r.error("No findings scanned for current review verification");
+  r.summary();
+  return r.errors > 0 ? 1 : 0;
+}
+if (process.argv[1] && path2.resolve(process.argv[1]) === fileURLToPath(__apexBundleUrl)) {
+  process.exit(runValidator());
+}
+
+// plugin/mcp/apex/src/core/state.mjs
+import { createHash as createHash4, randomBytes as randomBytes2 } from "node:crypto";
+import fs3 from "node:fs";
+import path3 from "node:path";
+var STEP_ORDER = ["1", "3_5", "2", "3", "4", "5", "6", "7"];
+var VALID_STEP_KEYS = new Set(STEP_ORDER);
+var STEP_TO_INT = { 1: 1, 2: 2, 3: 3, "3_5": 3, 4: 4, 5: 5, 6: 6, 7: 7 };
+var SUPPORTED_SCHEMAS2 = /* @__PURE__ */ new Set(["1.0", "2.0", "3.0", "session-state-v3"]);
+var PROJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+var RETRYABLE_RENAME = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+var STALE_LOCK_MS = 6e4;
+var STATE_FILE = "00-session-state.json";
+var CHANGE_LOG_FILE = ".session-changes.jsonl";
+var STEP_NAMES = [
+  ["1", "Requirements", "02-Requirements"],
+  ["3_5", "Governance", "04g-Governance"],
+  ["2", "Architecture", "03-Architect"],
+  ["3", "Design", "04-Design"],
+  ["4", "IaC Plan", ""],
+  ["5", "IaC Code", ""],
+  ["6", "Deploy", ""],
+  ["7", "As-Built", "08-As-Built"]
+];
+var REVIEW_AUDIT_KEYS = ["1", "2", "4", "5", "6"];
+function stepTemplate() {
+  return Object.fromEntries(
+    STEP_NAMES.map(([key, name, agent]) => [
+      key,
+      {
+        name,
+        agent,
+        status: "pending",
+        sub_step: null,
+        started: null,
+        completed: null,
+        artifacts: [],
+        context_files_used: []
+      }
+    ])
+  );
+}
+function reviewAuditTemplate() {
+  return Object.fromEntries(
+    REVIEW_AUDIT_KEYS.map((key) => [
+      `step_${key}`,
+      { complexity: "", passes_planned: 0, passes_executed: 0, skipped: [], skip_reasons: [] }
+    ])
+  );
+}
+function makeTemplate(project) {
+  return {
+    schema_version: "3.0",
+    project,
+    iac_tool: "",
+    region: "swedencentral",
+    branch: "main",
+    updated: "",
+    current_step: 0,
+    decisions: {
+      region: "swedencentral",
+      compliance: "",
+      budget: "",
+      architecture_pattern: "",
+      deployment_strategy: "",
+      complexity: ""
+    },
+    open_findings: [],
+    decision_log: [],
+    review_audit: reviewAuditTemplate(),
+    steps: stepTemplate()
+  };
+}
+function isoNow() {
+  return (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+function validateStepKey(step) {
+  const value = String(step ?? "").trim();
+  if (!VALID_STEP_KEYS.has(value)) {
+    throw invalidInput(`Invalid step key '${value}'. Valid keys: ${[...VALID_STEP_KEYS].sort().join(", ")}`);
+  }
+  return value;
+}
+function stepToInt(step) {
+  return STEP_TO_INT[step] ?? 0;
+}
+function validateProjectName(project) {
+  if (typeof project !== "string" || !PROJECT_PATTERN.test(project) || project.includes("..")) {
+    throw invalidInput(`Invalid project name: ${JSON.stringify(project)}`, {
+      remediation: "Use letters, digits, '.', '_' or '-' (max 100 characters)."
+    });
+  }
+  return project;
+}
+function rejectSymlink(target) {
+  let stat;
+  try {
+    stat = fs3.lstatSync(target);
+  } catch {
+    return;
+  }
+  if (stat.isSymbolicLink()) {
+    throw invalidInput(`Symlinks are not allowed in the project path: ${target}`, {
+      remediation: "Replace the link with a real folder inside the workspace."
+    });
+  }
+}
+function projectDir(ctx, project) {
+  const outputDir = path3.join(ctx.workspace, "agent-output");
+  const dir = path3.join(outputDir, validateProjectName(project));
+  rejectSymlink(outputDir);
+  rejectSymlink(dir);
+  return dir;
+}
+function sessionStatePath(ctx, project) {
+  const statePath = path3.join(projectDir(ctx, project), STATE_FILE);
+  rejectSymlink(statePath);
+  return statePath;
+}
+var sha2562 = (bytes) => createHash4("sha256").update(bytes).digest("hex");
+function fileRevision(target) {
+  let stat;
+  try {
+    stat = fs3.lstatSync(target);
+  } catch (error2) {
+    if (error2.code === "ENOENT") return null;
+    throw error2;
+  }
+  if (stat.isSymbolicLink()) throw invalidInput(`Symlink cannot be a revision input: ${target}`);
+  if (!stat.isDirectory()) return sha2562(fs3.readFileSync(target));
+  const ignored = /* @__PURE__ */ new Set([".git", ".terraform", "node_modules", ".venv", "__pycache__"]);
+  const entries = [];
+  const visit = (directory) => {
+    for (const name of fs3.readdirSync(directory).sort()) {
+      if (ignored.has(name)) continue;
+      const child = path3.join(directory, name);
+      const childStat = fs3.lstatSync(child);
+      if (childStat.isSymbolicLink()) throw invalidInput(`Symlink cannot be a revision input: ${child}`);
+      if (childStat.isDirectory()) visit(child);
+      else if (childStat.isFile()) {
+        entries.push([path3.relative(target, child).split(path3.sep).join("/"), fileRevision(child)]);
+      } else throw invalidInput(`Unsupported revision input: ${child}`);
+    }
+  };
+  visit(target);
+  return sha2562(Buffer.from(JSON.stringify(entries), "utf8"));
+}
+function isPlainObject3(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+function validateState(data) {
+  const fail = (message) => {
+    throw new ApexError("STATE_INVALID", message, {
+      remediation: "Recover the state from its backup (recoverState) or ask the owner to repair it."
+    });
+  };
+  if (!isPlainObject3(data) || typeof data.project !== "string" || !data.project) {
+    fail("State recovery required: missing project identity");
+  }
+  if (!SUPPORTED_SCHEMAS2.has(String(data.schema_version ?? "1.0"))) {
+    fail("Unsupported state schema; owner migration required");
+  }
+  const steps = data.steps ?? {};
+  if (!isPlainObject3(steps) || !Number.isInteger(data.current_step) || data.current_step < 0 || data.current_step > 7) {
+    fail("State recovery required: invalid steps/current_step");
+  }
+  if (Object.entries(steps).some(([key, value]) => !VALID_STEP_KEYS.has(key) || !isPlainObject3(value))) {
+    fail("State recovery required: invalid step entry");
+  }
+  const attempts = data.review_attempts ?? [];
+  const attemptKeys = ["id", "step", "kind", "input_digest", "outcome", "retry_of", "recorded_at"];
+  if (!Array.isArray(attempts) || attempts.some(
+    (attempt) => !isPlainObject3(attempt) || attempt.schema_version !== "review-attempt-v1" || !attemptKeys.every((key) => key in attempt)
+  )) {
+    fail("Invalid review attempt history");
+  }
+  const selections = data.review_selections ?? {};
+  if (!isPlainObject3(selections)) fail("Invalid review selection map; owner migration required");
+  for (const [step, record2] of Object.entries(selections)) {
+    if (step !== "4" || !isPlainObject3(record2)) fail("Invalid review selection record");
+    const expectedFocus = "comprehensive";
+    if (record2.schema_version !== "review-selection-v1" || record2.review_focus !== expectedFocus || record2.input_coverage !== "primary-and-review-guidance" || !Number.isInteger(record2.pass_number) || record2.pass_number < 2 || typeof record2.path !== "string" || !record2.path || typeof record2.selected_at !== "string" || !record2.selected_at || typeof record2.sha256 !== "string" || record2.sha256.length !== 64) {
+      fail("Unsupported or malformed review-selection-v1 record");
+    }
+  }
+}
+function pythonFloat(value) {
+  const text = String(value).trim().toLowerCase();
+  if (/^[+-]?(inf|infinity|nan)$/.test(text))
+    return Number.parseFloat(text.replace("infinity", "inf").replace("inf", "Infinity"));
+  return /^[+-]?(\d+(_?\d+)*\.?\d*|\.\d+)(e[+-]?\d+)?$/.test(text) ? Number(text.replaceAll("_", "")) : null;
+}
+function migrateToV3(data) {
+  const parsed = pythonFloat(data.schema_version ?? "1.0");
+  if ((parsed ?? 1) >= 3) return data;
+  const setDefault = (key, value) => {
+    if (!(key in data)) data[key] = value;
+  };
+  data.schema_version = "3.0";
+  setDefault("decision_log", []);
+  setDefault("review_audit", reviewAuditTemplate());
+  setDefault("open_findings", []);
+  setDefault("decisions", {});
+  setDefault("steps", stepTemplate());
+  const template = stepTemplate();
+  for (const key of STEP_ORDER) {
+    if (!(key in data.steps)) data.steps[key] = template[key];
+  }
+  return data;
+}
+function readState(statePath) {
+  let content;
+  try {
+    content = fs3.readFileSync(statePath);
+  } catch (error2) {
+    if (error2.code === "ENOENT") {
+      throw new ApexError("STATE_MISSING", `No session state at ${statePath}`, {
+        remediation: "Initialise the project with the apex init tool first."
+      });
+    }
+    throw error2;
+  }
+  let data;
+  try {
+    data = JSON.parse(content.toString("utf8"));
+    validateState(data);
+  } catch (error2) {
+    throw new ApexError(
+      "STATE_INVALID",
+      `State recovery required for ${statePath}; primary and backup were not changed`,
+      { cause: error2, remediation: "Recover from the backup with recoverState, giving a reason." }
+    );
+  }
+  return { data, path: path3.resolve(statePath), revision: sha2562(content), inputRevisions: /* @__PURE__ */ new Map() };
+}
+function checkStateRevision(doc, statePath) {
+  if (doc.path !== path3.resolve(statePath) || fileRevision(statePath) !== doc.revision) {
+    throw stateConflict("State conflict: primary revision changed; reload before retrying", {
+      remediation: "Read the state again (status) and repeat the change if it is still needed."
+    });
+  }
+  for (const [inputPath, revision] of doc.inputRevisions) {
+    if (fileRevision(inputPath) !== revision) {
+      throw stateConflict(`Input conflict: validated bytes changed at ${inputPath}`);
+    }
+  }
+}
+function serializeState(data) {
+  const ordered = (value) => {
+    if (!isPlainObject3(value)) return value;
+    const keys = Object.keys(value);
+    const stepKeyed = keys.length > 0 && keys.every((key) => VALID_STEP_KEYS.has(key));
+    const sorted = stepKeyed ? STEP_ORDER.filter((key) => key in value) : keys;
+    return { keys: sorted, value };
+  };
+  const render = (value, indent) => {
+    if (Array.isArray(value)) {
+      if (value.length === 0) return "[]";
+      const inner = value.map((item) => `${indent}  ${render(item, `${indent}  `)}`);
+      return `[
+${inner.join(",\n")}
+${indent}]`;
+    }
+    if (isPlainObject3(value)) {
+      const { keys } = ordered(value);
+      if (keys.length === 0) return "{}";
+      const inner = keys.map((key) => `${indent}  ${JSON.stringify(key)}: ${render(value[key], `${indent}  `)}`);
+      return `{
+${inner.join(",\n")}
+${indent}}`;
+    }
+    return JSON.stringify(value) ?? "null";
+  };
+  return `${render(data, "")}
+`;
+}
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function renameWithRetry(from, to, { attempts = 10, baseDelayMs = 20 } = {}) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      fs3.renameSync(from, to);
+      return;
+    } catch (error2) {
+      if (!RETRYABLE_RENAME.has(error2.code) || attempt >= attempts) throw error2;
+      sleepSync(Math.min(baseDelayMs * 2 ** (attempt - 1), 1e3));
+    }
+  }
+}
+function atomicWrite(statePath, data, { backup = true } = {}) {
+  fs3.mkdirSync(path3.dirname(statePath), { recursive: true });
+  const tmp = path3.join(path3.dirname(statePath), `.apex-${randomBytes2(6).toString("hex")}.tmp`);
+  const fd = fs3.openSync(tmp, "wx");
+  try {
+    fs3.writeSync(fd, serializeState(data));
+    fs3.fsyncSync(fd);
+  } finally {
+    fs3.closeSync(fd);
+  }
+  try {
+    if (backup && fs3.existsSync(statePath)) fs3.copyFileSync(statePath, statePath.replace(/\.json$/, ".json.bak"));
+    renameWithRetry(tmp, statePath);
+  } finally {
+    fs3.rmSync(tmp, { force: true });
+  }
+}
+function withProjectLock(statePath, fn) {
+  fs3.mkdirSync(path3.dirname(statePath), { recursive: true });
+  const lockPath = `${statePath}.node.lock`;
+  let fd;
+  for (let attempt = 0; attempt < 2 && fd === void 0; attempt += 1) {
+    try {
+      fd = fs3.openSync(lockPath, "wx");
+      fs3.writeSync(fd, JSON.stringify({ pid: process.pid, at: isoNow() }));
+    } catch (error2) {
+      if (error2.code !== "EEXIST") throw error2;
+      const age = Date.now() - fs3.statSync(lockPath).mtimeMs;
+      if (age > STALE_LOCK_MS && attempt === 0) {
+        fs3.rmSync(lockPath, { force: true });
+        continue;
+      }
+      throw stateConflict("State conflict: another writer holds the project lock", {
+        remediation: "Retry shortly; only one change per project can run at a time."
+      });
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    fs3.closeSync(fd);
+    fs3.rmSync(lockPath, { force: true });
+  }
+}
+function appendChangeLog(statePath, entry) {
+  try {
+    fs3.appendFileSync(path3.join(path3.dirname(statePath), CHANGE_LOG_FILE), `${JSON.stringify(entry)}
+`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function writeState(statePath, data, { doc = null, audit: audit2 = null } = {}) {
+  return withProjectLock(statePath, () => {
+    const before = fs3.existsSync(statePath) ? fileRevision(statePath) : null;
+    if (doc) checkStateRevision(doc, statePath);
+    else if (before !== null) {
+      throw stateConflict("State conflict: existing state requires a revision-aware read before writing");
+    }
+    data.updated = isoNow();
+    validateState(data);
+    atomicWrite(statePath, data);
+    const after = fileRevision(statePath);
+    if (doc) doc.revision = after;
+    if (audit2) {
+      appendChangeLog(statePath, {
+        at: data.updated,
+        tool: audit2.tool,
+        args_sha256: sha2562(Buffer.from(JSON.stringify(audit2.args ?? {}), "utf8")),
+        revision_before: before,
+        revision_after: after,
+        outcome: audit2.outcome ?? "applied"
+      });
+    }
+    return after;
+  });
+}
+function recoverState(statePath, project, reason) {
+  if (typeof reason !== "string" || !reason.trim()) throw invalidInput("Recovery requires a non-empty audit reason");
+  return withProjectLock(statePath, () => {
+    let healthy;
+    try {
+      readState(statePath);
+      healthy = true;
+    } catch {
+      healthy = false;
+    }
+    if (healthy) throw invalidInput("Healthy primary state cannot be replaced by backup recovery");
+    const backup = statePath.replace(/\.json$/, ".json.bak");
+    const { data } = readState(backup);
+    if (!("steps" in data) || !isPlainObject3(data.decisions ?? {})) {
+      throw invalidInput("Backup recovery requires explicit valid steps and decisions structures");
+    }
+    if (data.project !== project) throw invalidInput("Backup belongs to another project");
+    let damaged = null;
+    if (fs3.existsSync(statePath)) {
+      damaged = path3.join(path3.dirname(statePath), `.damaged-state-${randomBytes2(6).toString("hex")}`);
+      fs3.copyFileSync(statePath, damaged);
+    }
+    const now = isoNow();
+    (data.decision_log ??= []).push({
+      decision: "Explicit backup recovery",
+      rationale: reason.trim(),
+      timestamp: now,
+      backup_sha256: fileRevision(backup)
+    });
+    data.updated = now;
+    atomicWrite(statePath, data, { backup: false });
+    const revision = fileRevision(statePath);
+    appendChangeLog(statePath, {
+      at: now,
+      tool: "recoverState",
+      args_sha256: sha2562(Buffer.from(reason.trim(), "utf8")),
+      revision_before: null,
+      revision_after: revision,
+      outcome: "recovered"
+    });
+    return { outcome: "recovered", revision, preserved_damaged_path: damaged };
+  });
+}
+
+// plugin/mcp/apex/src/core/gates.mjs
+var CHALLENGER_GATE = {
+  1: ["01-requirements.md", "challenge-findings-requirements.json"],
+  2: ["02-architecture-assessment.md", "challenge-findings-architecture.json"],
+  4: ["04-implementation-plan.md", "challenge-findings-plan.json"]
+};
+var REVIEW_GUIDANCE = [
+  ".github/agents/_subagents/challenger-review-subagent.agent.md",
+  ".github/skills/apex-azure-defaults/references/adversarial-checklists.md",
+  ".github/skills/apex-azure-defaults/references/adversarial-review-protocol.md",
+  "tools/scripts/validate-challenger-findings.mjs"
+];
+var EXPECTED_TYPE = {
+  1: "requirements",
+  2: "architecture",
+  4: "implementation-plan"
+};
+var isFile = (target) => {
+  try {
+    return fs4.statSync(target).isFile();
+  } catch {
+    return false;
+  }
+};
+function reviewPaths(ctx, project, step, selected, data) {
+  const gate = CHALLENGER_GATE[step];
+  if (!gate) return [];
+  const gates = [[...gate]];
+  if ((step === "2" || step === "4") && data?.decisions?.review_depth === "deep") {
+    gates[0] = [gate[0], gate[1].replace(/\.json$/, "-pass1.json")];
+  }
+  if (step === "2") gates.push(["03-des-cost-estimate.md", "challenge-findings-cost-estimate.json"]);
+  const dir = projectDir(ctx, project);
+  if (step === "4" && selected) return [[path4.join(dir, gate[0]), selected]];
+  const produced = gates.some(([gating]) => isFile(path4.join(dir, gating)));
+  return gates.filter(([gating]) => isFile(path4.join(dir, gating)) || step === "2" && produced).map(([gating, sidecar]) => [path4.join(dir, gating), path4.join(dir, sidecar)]);
+}
+function findingsMissing(ctx, project, step, selected, data) {
+  let gating = null;
+  let sidecar = null;
+  for ([gating, sidecar] of reviewPaths(ctx, project, step, selected, data)) {
+    if (!isFile(sidecar)) return { blocked: true, gating, sidecar };
+    try {
+      const text = fs4.readFileSync(sidecar, "utf8").trim();
+      if (!text) return { blocked: true, gating, sidecar };
+      JSON.parse(text);
+    } catch {
+      return { blocked: true, gating, sidecar };
+    }
+  }
+  return { blocked: false, gating, sidecar };
+}
+function findingsInvalid(ctx, project, step, selected, data) {
+  const root = path4.resolve(ctx.workspace);
+  for (const [artifact, sidecar] of reviewPaths(ctx, project, step, selected, data)) {
+    if (!isFile(sidecar)) continue;
+    try {
+      const document = JSON.parse(fs4.readFileSync(sidecar, "utf8"));
+      if (document === null || typeof document !== "object" || !Array.isArray(document.findings) || "batch_results" in document) {
+        return `${sidecar}: invalid single-review findings payload`;
+      }
+      if (!isFile(artifact)) return `${artifact}: required reviewed artifact is missing`;
+      const challenged = document.challenged_artifact;
+      if (typeof challenged !== "string" || path4.resolve(root, challenged) !== path4.resolve(artifact)) {
+        return `${sidecar}: challenged_artifact does not match the gating artifact`;
+      }
+      let expectedType = EXPECTED_TYPE[step];
+      let expectedFocus = "comprehensive";
+      if (path4.basename(artifact) === "03-des-cost-estimate.md") {
+        expectedType = "cost-estimate";
+        expectedFocus = "cost-feasibility";
+      } else if (sidecar.endsWith("-pass1.json") && (step === "2" || step === "4")) {
+        expectedFocus = "security-governance";
+      }
+      if (document.artifact_type !== expectedType || document.review_focus !== expectedFocus) {
+        return `${sidecar}: review type/focus does not match the required gate`;
+      }
+      const stem = path4.basename(sidecar, ".json");
+      const expectedPass = selected ? Number.parseInt(stem.slice(stem.lastIndexOf("-pass") + 5), 10) : 1;
+      if (!Number.isInteger(document.pass_number) || document.pass_number !== expectedPass) {
+        return `${sidecar}: required pass-${expectedPass} review is invalid`;
+      }
+      if (["BLOCKED", "FAILED"].includes(document.overall_assessment)) {
+        return `${sidecar}: reviewer reported blocked/failed`;
+      }
+      if (document.must_fix_count !== 0 || document.findings.some((finding3) => !finding3 || typeof finding3 !== "object" || finding3.severity === "must_fix")) {
+        return `${sidecar}: unresolved must_fix findings; decisions are not closure evidence`;
+      }
+      const errors = verifyReviewFile(path4.resolve(sidecar), { root, guidanceRoot: path4.resolve(ctx.apexRoot) });
+      if (errors.length) return `${sidecar}: strict review validation failed: ${errors.join("\n").slice(-3e3)}`;
+    } catch (error2) {
+      return `${sidecar}: review verification unavailable or invalid (${error2.message})`;
+    }
+  }
+  return null;
+}
+function recordSkip(data, step, reason, now) {
+  data.decisions ??= {};
+  (data.decisions.challenger_skip ??= []).push({ step, reason, recorded: now });
+}
+function selectReplacementReview(ctx, project, step, options, data) {
+  const chosen = options.planReview;
+  const reason = String(options.planReviewReason ?? "").trim();
+  if (chosen == null && !reason) {
+    const stored = data?.review_selections?.[step];
+    if (stored == null) return { selected: null, selection: null };
+    if (typeof stored !== "object" || stored.schema_version !== "review-selection-v1") {
+      throw invalidInput("Unsupported review selection; explicit owner migration required");
+    }
+    const replay = selectReplacementReview(
+      ctx,
+      project,
+      step,
+      {
+        planReview: stored.path,
+        planReviewReason: "Reuse explicitly stored review selection",
+        allowMissingChallenger: options.allowMissingChallenger ?? false
+      },
+      data
+    );
+    if (fileRevision(replay.selected) !== stored.sha256) {
+      throw invalidInput("Selected review bytes changed; explicit owner resolution required");
+    }
+    if (["pass_number", "review_focus", "path"].some((field) => stored[field] !== replay.selection.stored[field])) {
+      throw invalidInput("Stored selection metadata does not match selected evidence");
+    }
+    replay.selection.stored = stored;
+    return replay;
+  }
+  if (step !== "4" || !chosen || !reason) {
+    throw invalidInput("Plan replacement selection requires Step 4, a review path and its audit reason");
+  }
+  if (data?.decisions?.review_depth === "deep") {
+    throw invalidInput(
+      "--plan-review selects a default comprehensive confirmation, not a deep-review lens replacement"
+    );
+  }
+  if (options.allowMissingChallenger) throw invalidInput("A selected review cannot use the missing-review bypass");
+  const dir = path4.resolve(projectDir(ctx, project));
+  const candidate = path4.isAbsolute(chosen) ? chosen : path4.join(ctx.workspace, chosen);
+  let stat;
+  try {
+    stat = fs4.lstatSync(candidate);
+  } catch {
+    stat = null;
+  }
+  const sameDir = (a, b) => {
+    try {
+      return fs4.realpathSync.native(a) === fs4.realpathSync.native(b);
+    } catch {
+      return false;
+    }
+  };
+  if (!stat || stat.isSymbolicLink() || !stat.isFile() || !sameDir(path4.dirname(path4.resolve(candidate)), dir)) {
+    throw invalidInput("Selected review must be a regular, non-symlink file in the current project");
+  }
+  const match = /^challenge-findings-plan-pass([2-9][0-9]*|1[0-9]+)\.json$/.exec(path4.basename(candidate));
+  if (!match) throw invalidInput("Select an explicitly authorized later Plan pass using its canonical filename");
+  if (!isFile(path4.join(dir, CHALLENGER_GATE["4"][1]))) {
+    throw invalidInput("Preserve the original Plan review before selecting a replacement");
+  }
+  const resolved = path4.join(dir, path4.basename(candidate));
+  const digest2 = createHash5("sha256").update(fs4.readFileSync(resolved)).digest("hex");
+  return {
+    selected: resolved,
+    selection: {
+      decision: "Select Plan replacement review for completion",
+      rationale: `${reason}; review=${path4.basename(resolved)}; pass=${match[1]}; sha256=${digest2}`,
+      step: "4",
+      stored: {
+        schema_version: "review-selection-v1",
+        path: path4.relative(path4.resolve(ctx.workspace), resolved).split(path4.sep).join("/"),
+        sha256: digest2,
+        pass_number: Number.parseInt(match[1], 10),
+        review_focus: "comprehensive",
+        input_coverage: "primary-and-review-guidance"
+      }
+    }
+  };
+}
+function watchReviewInputs(ctx, doc, project, step, selected) {
+  const dir = projectDir(ctx, project);
+  const pairs = reviewPaths(ctx, project, step, selected, doc.data);
+  const paths = pairs.flat();
+  for (const [, sidecar] of pairs) {
+    if (!isFile(sidecar)) continue;
+    try {
+      const document = JSON.parse(fs4.readFileSync(sidecar, "utf8"));
+      for (const supporting of document.supporting_inputs ?? []) paths.push(path4.join(ctx.workspace, supporting.path));
+      if (document.schema_version === "1.1") {
+        for (const relative of [document.transcript?.path, document.review_request?.path]) {
+          if (typeof relative !== "string") continue;
+          paths.push(path4.join(ctx.workspace, relative));
+          if (relative.endsWith(".md")) paths.push(path4.join(ctx.workspace, relative.replace(/\.md$/, ".json")));
+        }
+      }
+    } catch {
+    }
+  }
+  if (CHALLENGER_GATE[step]) paths.push(...CHALLENGER_GATE[step].map((name) => path4.join(dir, name)));
+  if (step === "2") {
+    paths.push(path4.join(dir, "03-des-cost-estimate.md"), path4.join(dir, "challenge-findings-cost-estimate.json"));
+  }
+  paths.push(...REVIEW_GUIDANCE.map((name) => path4.join(ctx.apexRoot, name)));
+  for (const target of paths) doc.inputRevisions.set(path4.resolve(target), fileRevision(target));
+}
+function recordSelection(data, step, selection, now) {
+  if (!selection) return;
+  const stored = { ...selection.stored };
+  stored.selected_at ??= now;
+  (data.review_selections ??= {})[step] = stored;
+  const { stored: _ignored, ...entry } = selection;
+  (data.decision_log ??= []).push({ ...entry, timestamp: now });
+}
+
+// plugin/mcp/apex/src/core/commands.mjs
+var ARTIFACT_PATTERNS = [
+  [/00-session-state\.json$/, "session-state"],
+  [/00-handoff\.md$/, "handoff"],
+  [/01-requirements\.md$/, "requirements"],
+  [/02-architecture.*\.md$/, "architecture"],
+  [/03-des-.*\.md$/, "design"],
+  [/04-governance-constraints\.json$/, "governance-json"],
+  [/04-governance-constraints\.md$/, "governance"],
+  [/04-implementation-plan\.md$/, "implementation-plan"],
+  [/04-dependency-diagram/, "diagram"],
+  [/04-runtime-diagram/, "diagram"],
+  [/06-deployment-summary\.md$/, "deployment-summary"],
+  [/07-.*\.md$/, "as-built"],
+  [/09-lessons-learned\.json$/, "lessons-json"],
+  [/09-lessons-learned\.md$/, "lessons"]
+];
+function classifyArtifact(filename) {
+  for (const [pattern, type] of ARTIFACT_PATTERNS) if (pattern.test(filename)) return type;
+  if (filename.endsWith(".json")) return "json";
+  if (filename.endsWith(".md")) return "markdown";
+  return "other";
+}
+function extractStep(filename) {
+  return /^(\d{2})-/.exec(filename)?.[1] ?? "";
+}
+function audit(tool, args) {
+  return { tool, args };
+}
+function load(ctx, project) {
+  const statePath = sessionStatePath(ctx, project);
+  return { statePath, doc: readState(statePath) };
+}
+function init(ctx, { project, force = false }) {
+  validateProjectName(project);
+  const statePath = sessionStatePath(ctx, project);
+  const exists = fs5.existsSync(statePath);
+  if (exists && !force) {
+    throw invalidInput(`Session state already exists: ${statePath}. Use --force to overwrite.`, {
+      remediation: "Use the status tool to read the existing project, or pass force only to start over."
+    });
+  }
+  const data = makeTemplate(project);
+  const doc = exists ? { data, path: path5.resolve(statePath), revision: fileRevision(statePath), inputRevisions: /* @__PURE__ */ new Map() } : null;
+  writeState(statePath, data, { doc, audit: audit("init", { project, force }) });
+  return { created: true, project, file: statePath };
+}
+var BASELINE_REMEDIATION = "Run live governance discovery first and record governance_baseline=live before starting Step 4.";
+function enforceGovernanceBaselineGate(data, project, step) {
+  if (step !== "4") return;
+  const baseline = String(data?.decisions?.governance_baseline ?? "").trim();
+  if (baseline === "live") return;
+  const error2 = baseline === "reference" ? "governance_baseline_reference" : "governance_baseline_unset";
+  throw gateBlocked("Step 4 requires a live governance baseline", {
+    remediation: BASELINE_REMEDIATION,
+    details: { project, step, error: error2, governance_baseline: baseline || null }
+  });
+}
+function startStep(ctx, { project, step, force = false }) {
+  const key = validateStepKey(step);
+  const { statePath, doc } = load(ctx, project);
+  const data = migrateToV3(doc.data);
+  enforceGovernanceBaselineGate(data, project, key);
+  const stepData = data.steps[key] ?? {};
+  if (stepData.status === "complete" && !force) {
+    throw invalidInput(`Step ${key} is already complete. Use --force to re-start.`);
+  }
+  const now = isoNow();
+  Object.assign(stepData, { status: "in_progress", started: now, completed: null });
+  data.steps[key] = stepData;
+  data.current_step = stepToInt(key);
+  writeState(statePath, data, { doc, audit: audit("startStep", { project, step: key, force }) });
+  return { project, step: key, status: "in_progress", started: now };
+}
+var TELEMETRY_FIELDS = [
+  ["stepStart", "step_start_iso"],
+  ["stepEnd", "step_end_iso"],
+  ["elapsedMs", "elapsed_ms"],
+  ["inputTokens", "input_tokens"],
+  ["outputTokens", "output_tokens"],
+  ["subagentCount", "subagent_count"],
+  ["validationAttempts", "validation_attempts"],
+  ["cacheHits", "cache_hits"]
+];
+function checkpoint(ctx, { project, step, subStep, artifact = null, telemetry = {} }) {
+  const key = validateStepKey(step);
+  const { statePath, doc } = load(ctx, project);
+  const data = migrateToV3(doc.data);
+  const stepData = data.steps[key] ?? {};
+  stepData.sub_step = subStep;
+  if (artifact && !(stepData.artifacts ?? []).includes(artifact)) (stepData.artifacts ??= []).push(artifact);
+  const supplied = Object.fromEntries(
+    TELEMETRY_FIELDS.filter(([input]) => telemetry[input] != null).map(([input, field]) => [field, telemetry[input]])
+  );
+  if (Object.keys(supplied).length) stepData.telemetry = { ...stepData.telemetry ?? {}, ...supplied };
+  data.steps[key] = stepData;
+  writeState(statePath, data, {
+    doc,
+    audit: audit("checkpoint", { project, step: key, subStep, artifact, telemetry })
+  });
+  const result = { project, step: key, sub_step: subStep, updated: data.updated ?? "" };
+  if (artifact) result.artifact_added = artifact;
+  if (Object.keys(supplied).length) result.telemetry_updated = Object.keys(supplied);
+  return result;
+}
+function decide(ctx, { project, key = null, value = null, decision = null, rationale = null, step = null }) {
+  const hasKv = key != null;
+  const hasDecision = decision != null;
+  if (hasKv && hasDecision) {
+    throw invalidInput("Cannot use both --key/--value (Mode A) and --decision (Mode B) at the same time.");
+  }
+  if (!hasKv && !hasDecision)
+    throw invalidInput("Provide either --key/--value for decisions or --decision for decision_log.");
+  if (hasKv && value == null) throw invalidInput("--key requires --value.");
+  const { statePath, doc } = load(ctx, project);
+  const data = migrateToV3(doc.data);
+  if (hasKv) {
+    (data.decisions ??= {})[key] = value;
+    writeState(statePath, data, { doc, audit: audit("decide", { project, key, value }) });
+    return { project, key, value };
+  }
+  const log = data.decision_log ??= [];
+  const existing = log.find(
+    (item) => item.decision === decision && (item.rationale ?? null) === (rationale || null) && (item.step ?? null) === (step || null)
+  );
+  if (existing) {
+    return { project, decision, timestamp: existing.timestamp, outcome: "already_applied", ...step ? { step } : {} };
+  }
+  const entry = { decision, timestamp: isoNow() };
+  if (rationale) entry.rationale = rationale;
+  if (step) entry.step = step;
+  log.push(entry);
+  writeState(statePath, data, { doc, audit: audit("decide", { project, decision, rationale, step }) });
+  return { project, decision, timestamp: entry.timestamp, ...step ? { step } : {} };
+}
+function finding(ctx, { project, add = null, addMany = null, remove = null }) {
+  if (!add && !remove && !addMany) throw invalidInput("Provide --add, --add-many, or --remove.");
+  if (addMany) {
+    if (!Array.isArray(addMany)) throw invalidInput("apex-recall: --add-many expected a JSON array");
+    const items = addMany.map((item) => {
+      if (typeof item === "string") return item;
+      if (item && typeof item === "object") {
+        if (typeof item.text !== "string")
+          throw invalidInput("apex-recall: --add-many object entries require a string `text` key");
+        return item.text;
+      }
+      throw invalidInput("apex-recall: --add-many entries must be strings or objects with a `text` key");
+    });
+    if (!items.length) return { project, action: "appended", appended: 0 };
+    const { statePath: statePath2, doc: doc2 } = load(ctx, project);
+    const data2 = migrateToV3(doc2.data);
+    const findings2 = data2.open_findings ??= [];
+    const fresh = [...new Set(items)].filter((item) => !findings2.includes(item));
+    if (fresh.length) {
+      findings2.push(...fresh);
+      writeState(statePath2, data2, { doc: doc2, audit: audit("finding", { project, addMany }) });
+    }
+    return {
+      project,
+      action: "appended",
+      appended: fresh.length,
+      skipped_existing: items.length - fresh.length,
+      total: findings2.length
+    };
+  }
+  const { statePath, doc } = load(ctx, project);
+  const data = migrateToV3(doc.data);
+  const findings = data.open_findings ??= [];
+  if (add) {
+    if (!findings.includes(add)) findings.push(add);
+    writeState(statePath, data, { doc, audit: audit("finding", { project, add }) });
+    return { project, action: "added", finding: add, total: findings.length };
+  }
+  const index = findings.indexOf(remove);
+  if (index === -1) return { project, action: "not_found", finding: remove, total: findings.length };
+  findings.splice(index, 1);
+  writeState(statePath, data, { doc, audit: audit("finding", { project, remove }) });
+  return { project, action: "removed", finding: remove, total: findings.length };
+}
+function reviewAudit(ctx, {
+  project,
+  step,
+  complexity = null,
+  passesPlanned = null,
+  passesExecuted = null,
+  skips = [],
+  skipReasons = [],
+  attemptId = null,
+  attemptKind = null,
+  inputDigest = null,
+  attemptOutcome = null,
+  retryOf = null
+}) {
+  const key = validateStepKey(step);
+  const { statePath, doc } = load(ctx, project);
+  const data = migrateToV3(doc.data);
+  const args = { project, step: key, complexity, passesPlanned, passesExecuted, skips, skipReasons };
+  if (attemptId != null || [attemptKind, inputDigest, attemptOutcome, retryOf].some(Boolean)) {
+    if (!attemptId || !/^[A-Za-z0-9_-]{1,100}$/.test(attemptId) || !["invocation", "repair", "empty-output-retry"].includes(attemptKind) || !/^[a-f0-9]{64}$/.test(inputDigest ?? "") || !["started", "completed", "failed", "unknown"].includes(attemptOutcome)) {
+      throw invalidInput("Attempt ID, kind, input digest and outcome are required");
+    }
+    const attempts = data.review_attempts ??= [];
+    const previous = attempts.filter((attempt) => attempt.id === attemptId);
+    const identity = { step: key, kind: attemptKind, input_digest: inputDigest, retry_of: retryOf };
+    if (previous.some((attempt) => Object.entries(identity).some(([field, value]) => attempt[field] !== value))) {
+      throw invalidInput("Attempt identity cannot be reused for different inputs, kind or step");
+    }
+    const last = previous.at(-1);
+    if (last && last.outcome === attemptOutcome) {
+      checkStateRevision(doc, statePath);
+      return { outcome: "already_applied", attempt_id: attemptId };
+    }
+    if (last && last.outcome !== "started") {
+      throw invalidInput(
+        "Terminal or unknown attempt outcomes cannot be rewritten; reconcile explicitly with the owner"
+      );
+    }
+    if (!last && attemptOutcome !== "started") throw invalidInput("Record attempt start before its outcome");
+    if (attemptKind === "empty-output-retry") {
+      const original = attempts.filter((attempt) => attempt.id === retryOf).at(-1);
+      if (original && (original.kind !== "invocation" || original.step !== key)) {
+        throw invalidInput("Retry must reference an original invocation in the same step; retry chains are forbidden");
+      }
+      if (!original || original.input_digest !== inputDigest || original.outcome !== "failed") {
+        throw invalidInput("Retry requires failed original attempt with identical input digest");
+      }
+      if (!last && attempts.some((attempt) => attempt.retry_of === retryOf)) {
+        throw invalidInput("Identical-input retry already recorded; allowance cannot reset");
+      }
+    } else if (retryOf != null) {
+      throw invalidInput("retry-of is only valid for empty-output-retry attempts");
+    }
+    attempts.push({
+      schema_version: "review-attempt-v1",
+      id: attemptId,
+      step: key,
+      kind: attemptKind,
+      input_digest: inputDigest,
+      outcome: attemptOutcome,
+      retry_of: retryOf,
+      recorded_at: isoNow()
+    });
+    writeState(statePath, data, {
+      doc,
+      audit: audit("reviewAudit", { ...args, attemptId, attemptKind, inputDigest, attemptOutcome, retryOf })
+    });
+    return { attempt_id: attemptId, outcome: attemptOutcome, authorization: "not_granted" };
+  }
+  const auditKey = `step_${key}`;
+  const reviewAuditMap = data.review_audit ??= {};
+  const entry = reviewAuditMap[auditKey] ??= {
+    complexity: "",
+    passes_planned: 0,
+    passes_executed: 0,
+    skipped: [],
+    skip_reasons: []
+  };
+  if (complexity != null) entry.complexity = complexity;
+  if (passesPlanned != null) entry.passes_planned = passesPlanned;
+  if (passesExecuted != null) {
+    if (passesExecuted < (entry.passes_executed ?? 0))
+      throw invalidInput("Recorded executed review count cannot decrease");
+    entry.passes_executed = passesExecuted;
+  }
+  for (const skip of skips) {
+    const number4 = Number.parseInt(skip, 10);
+    if (!(entry.skipped ??= []).includes(number4)) entry.skipped.push(number4);
+  }
+  for (const reason of skipReasons) if (!(entry.skip_reasons ??= []).includes(reason)) entry.skip_reasons.push(reason);
+  writeState(statePath, data, { doc, audit: audit("reviewAudit", args) });
+  return { project, step: key, audit_key: auditKey, entry };
+}
+var REVIEW_REMEDIATION = "Return to the artifact owner and 10-Challenger for current review and blocker closure. Preserve retry limits; do not restamp hashes.";
+function invalidReview(project, step, reason) {
+  return gateBlocked(reason, {
+    remediation: REVIEW_REMEDIATION,
+    details: { project, step, error: "challenger_findings_invalid", reason }
+  });
+}
+function sameSelection(prior, selected) {
+  return !selected || prior && Object.entries(selected).every(([field, value]) => field === "selected_at" || prior[field] === value);
+}
+var COST_ESTIMATE_FILE = "02-cost-estimate.json";
+var COST_GATE_REMEDIATION = "Regenerate or repair agent-output/<project>/02-cost-estimate.json with cost-estimate-subagent, then complete Step 2 again.";
+function readCostEstimate(ctx, project) {
+  const file = path5.join(projectDir(ctx, project), COST_ESTIMATE_FILE);
+  let stat;
+  try {
+    stat = fs5.lstatSync(file);
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+    return {
+      file,
+      problems: [{ path: COST_ESTIMATE_FILE, message: "02-cost-estimate.json is required for Step 2 completion" }]
+    };
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    return {
+      file,
+      problems: [{ path: COST_ESTIMATE_FILE, message: "02-cost-estimate.json must be a regular file" }]
+    };
+  }
+  try {
+    return { file, problems: checkCostEstimate(JSON.parse(fs5.readFileSync(file, "utf8"))) };
+  } catch (error2) {
+    return {
+      file,
+      problems: [{ path: COST_ESTIMATE_FILE, message: `02-cost-estimate.json is not valid JSON: ${error2.message}` }]
+    };
+  }
+}
+function enforceCostEstimateGate(ctx, project, step) {
+  if (step !== "2") return;
+  const { file, problems } = readCostEstimate(ctx, project);
+  if (problems.length === 0) return;
+  throw gateBlocked("Step 2 cost estimate is missing or invalid", {
+    remediation: COST_GATE_REMEDIATION,
+    details: { project, step, error: "cost_estimate_invalid", file, problems }
+  });
+}
+var POLICY_MAP_REMEDIATION = "Regenerate or repair agent-output/<project>/02-policy-map.json from the current 04-governance-constraints.json, then complete Step 2 again.";
+function readPolicyGateInput(ctx, project, filename) {
+  const file = path5.join(projectDir(ctx, project), filename);
+  let stat;
+  try {
+    stat = fs5.lstatSync(file);
+  } catch (error2) {
+    if (error2.code !== "ENOENT") throw error2;
+    return { file, missing: true, problems: [{ path: filename, message: `${filename} is required` }] };
+  }
+  if (stat.isSymbolicLink() || !stat.isFile()) {
+    return {
+      file,
+      problems: [{ path: filename, message: `${filename} must be a regular file` }]
+    };
+  }
+  const bytes = fs5.readFileSync(file);
+  try {
+    return { file, bytes, document: JSON.parse(bytes.toString("utf8")) };
+  } catch (error2) {
+    return {
+      file,
+      problems: [{ path: filename, message: `${filename} is not valid JSON: ${error2.message}` }]
+    };
+  }
+}
+function enforcePolicyMapGate(ctx, project, step) {
+  if (step !== "2") return;
+  const constraints = readPolicyGateInput(ctx, project, GOVERNANCE_CONSTRAINTS_FILE);
+  if (constraints.missing) {
+    throw gateBlocked("Step 2 requires governance constraints", {
+      remediation: "Run Step 1.5 Governance discovery before completing Step 2.",
+      details: {
+        project,
+        step,
+        error: "governance_constraints_missing",
+        file: constraints.file,
+        problems: constraints.problems
+      }
+    });
+  }
+  if (constraints.problems?.length) {
+    throw gateBlocked("Step 2 governance constraints are invalid", {
+      remediation: "Regenerate agent-output/<project>/04-governance-constraints.json with Governance discovery.",
+      details: {
+        project,
+        step,
+        error: "governance_constraints_missing",
+        file: constraints.file,
+        problems: constraints.problems
+      }
+    });
+  }
+  const policyMap = readPolicyGateInput(ctx, project, POLICY_MAP_FILE);
+  if (policyMap.problems?.length || policyMap.missing) {
+    throw gateBlocked("Step 2 policy map is missing or invalid", {
+      remediation: POLICY_MAP_REMEDIATION,
+      details: {
+        project,
+        step,
+        error: "policy_map_invalid",
+        file: policyMap.file,
+        problems: policyMap.problems
+      }
+    });
+  }
+  const constraintsSha256 = sha256Hex(constraints.bytes);
+  const problems = checkPolicyMap({
+    policyMap: policyMap.document,
+    constraints: constraints.document,
+    constraintsSha256
+  });
+  if (problems.length > 0) {
+    throw gateBlocked("Step 2 policy map is invalid", {
+      remediation: POLICY_MAP_REMEDIATION,
+      details: {
+        project,
+        step,
+        error: "policy_map_invalid",
+        file: policyMap.file,
+        constraints_file: constraints.file,
+        problems
+      }
+    });
+  }
+}
+function runGate(ctx, doc, project, step, options, { complete, watch, missingRemediation }) {
+  let selected;
+  let selection;
+  try {
+    ({ selected, selection } = selectReplacementReview(ctx, project, step, options, doc.data));
+    if (watch(selected)) {
+      watchReviewInputs(ctx, doc, project, step, selected);
+      if (selection && doc.inputRevisions.get(selected) !== selection.stored.sha256) {
+        throw invalidInput("Selected review changed before validation");
+      }
+    }
+  } catch (error2) {
+    if (error2 instanceof ApexError && error2.code !== "INVALID_INPUT") throw error2;
+    throw invalidReview(project, step, error2.message);
+  }
+  let blocked = false;
+  if (complete) {
+    const missing = findingsMissing(ctx, project, step, selected, doc.data);
+    blocked = missing.blocked;
+    if (blocked && !options.allowMissingChallenger) {
+      throw gateBlocked(`Required challenger findings missing for step ${step}`, {
+        remediation: missingRemediation,
+        details: {
+          project,
+          step,
+          error: "challenger_findings_missing",
+          gating_artifact: missing.gating,
+          required_sidecar: missing.sidecar
+        }
+      });
+    }
+    if (blocked && !String(options.challengerSkipReason ?? "").trim()) {
+      throw gateBlocked("A missing-review bypass needs an auditable reason", {
+        remediation: 'Provide challengerSkipReason "<auditable reason>"',
+        details: { project, step, error: "challenger_skip_reason_required" }
+      });
+    }
+  }
+  if (complete || selected) {
+    const invalid = findingsInvalid(ctx, project, step, selected, doc.data);
+    if (invalid) throw invalidReview(project, step, invalid);
+  }
+  return { blocked, selected, selection };
+}
+function completeStep(ctx, options) {
+  const { project } = options;
+  const step = validateStepKey(options.step);
+  const { statePath, doc } = load(ctx, project);
+  const { blocked, selection } = runGate(ctx, doc, project, step, options, {
+    complete: true,
+    watch: () => true,
+    missingRemediation: "Run the review against the gating artifact and produce the required findings sidecar, then complete the step again. To bypass intentionally, set allowMissingChallenger with challengerSkipReason."
+  });
+  checkStateRevision(doc, statePath);
+  const data = doc.data;
+  if (data.steps?.[step]?.status === "complete" && sameSelection(data.review_selections?.[step], selection?.stored)) {
+    return {
+      project,
+      step,
+      status: "complete",
+      outcome: "already_applied",
+      completed: data.steps[step].completed ?? null
+    };
+  }
+  enforceCostEstimateGate(ctx, project, step);
+  enforcePolicyMapGate(ctx, project, step, data);
+  migrateToV3(data);
+  const now = isoNow();
+  const stepData = data.steps[step] ?? {};
+  Object.assign(stepData, { status: "complete", completed: now, sub_step: null });
+  data.steps[step] = stepData;
+  const skip = blocked && options.allowMissingChallenger;
+  if (skip) recordSkip(data, step, String(options.challengerSkipReason).trim(), now);
+  recordSelection(data, step, selection, now);
+  writeState(statePath, data, { doc, audit: audit("completeStep", options) });
+  const next = STEP_ORDER[STEP_ORDER.indexOf(step) + 1] ?? "next";
+  return {
+    project,
+    step,
+    status: "complete",
+    completed: now,
+    ...skip ? { challenger_skip_recorded: true } : {},
+    hint: `Prefer transition (fromStep ${step}, toStep ${next}, complete) when also recording decisions or starting the next step.`
+  };
+}
+function transition(ctx, options) {
+  const { project } = options;
+  const fromStep = validateStepKey(options.fromStep);
+  const toStep = validateStepKey(options.toStep);
+  const complete = Boolean(options.complete);
+  const decisions = {};
+  for (const [rawKey, rawValue] of Object.entries(options.decisions ?? {})) {
+    const key = String(rawKey).trim();
+    if (!key) throw invalidInput("--decision key is empty");
+    decisions[key] = String(rawValue).trim();
+  }
+  const { statePath, doc } = load(ctx, project);
+  if (toStep === "4") {
+    const effectiveData = {
+      ...doc.data,
+      decisions: { ...doc.data.decisions ?? {}, ...decisions }
+    };
+    enforceGovernanceBaselineGate(effectiveData, project, toStep);
+  }
+  const explicit = ["planReview", "planReviewReason"].some((field) => options[field] != null);
+  if (explicit && !complete)
+    throw invalidReview(project, fromStep, "Replacement review selection requires transition --complete");
+  const { blocked, selection } = runGate(ctx, doc, project, fromStep, options, {
+    complete,
+    watch: (selected) => complete || Boolean(selected),
+    missingRemediation: "Run the review against the gating artifact and produce the required findings sidecar, then transition again. To bypass intentionally, set allowMissingChallenger with challengerSkipReason."
+  });
+  checkStateRevision(doc, statePath);
+  const data = doc.data;
+  const steps = data.steps ?? {};
+  if (steps[toStep]?.started && (data.current_step ?? 0) >= stepToInt(toStep) && (!complete || steps[fromStep]?.status === "complete") && Object.entries(decisions).every(([key, value]) => data.decisions?.[key] === value) && sameSelection(data.review_selections?.[fromStep], selection?.stored)) {
+    return { project, from_step: fromStep, to_step: toStep, outcome: "already_applied" };
+  }
+  if (steps[toStep]?.started) {
+    throw invalidInput("Transition conflict: destination already started; replay cannot reset progress or decisions");
+  }
+  if (complete) {
+    enforceCostEstimateGate(ctx, project, fromStep);
+    enforcePolicyMapGate(ctx, project, fromStep, data);
+  }
+  migrateToV3(data);
+  const now = isoNow();
+  const fromData = data.steps[fromStep] ?? {};
+  let skipRecorded = false;
+  if (complete) {
+    if (blocked && options.allowMissingChallenger && fromData.status !== "complete") {
+      recordSkip(data, fromStep, String(options.challengerSkipReason).trim(), now);
+      skipRecorded = true;
+    }
+    fromData.status = "complete";
+    fromData.completed = fromData.completed || now;
+    fromData.sub_step = null;
+  }
+  data.steps[fromStep] = fromData;
+  if (Object.keys(decisions).length) {
+    if (data.decisions && typeof data.decisions === "object" && !Array.isArray(data.decisions))
+      Object.assign(data.decisions, decisions);
+    else data.decisions = { ...decisions };
+  }
+  const toData = data.steps[toStep] ?? {};
+  Object.assign(toData, { status: "in_progress", started: now, completed: null });
+  data.steps[toStep] = toData;
+  data.current_step = stepToInt(toStep);
+  if (complete) recordSelection(data, fromStep, selection, now);
+  writeState(statePath, data, { doc, audit: audit("transition", options) });
+  return {
+    project,
+    from_step: fromStep,
+    to_step: toStep,
+    completed: complete,
+    decisions_recorded: Object.keys(decisions),
+    challenger_skip_recorded: skipRecorded,
+    timestamp: now
+  };
+}
+function listArtifacts(ctx, project) {
+  const dir = projectDir(ctx, project);
+  if (!fs5.existsSync(dir)) return [];
+  const rows = [];
+  const visit = (directory) => {
+    for (const entry of fs5.readdirSync(directory, { withFileTypes: true })) {
+      const full = path5.join(directory, entry.name);
+      if (entry.isSymbolicLink()) continue;
+      if (entry.isDirectory()) visit(full);
+      else if (entry.isFile() && !entry.name.startsWith(".") && ![".bak", ".lock", ".tmp"].includes(path5.extname(entry.name))) {
+        rows.push({
+          file: path5.relative(ctx.workspace, full).split(path5.sep).join("/"),
+          type: classifyArtifact(entry.name),
+          step: extractStep(entry.name),
+          modified: fs5.statSync(full).mtimeMs / 1e3
+        });
+      }
+    }
+  };
+  visit(dir);
+  const parts = (row) => row.file.split("/");
+  return rows.sort((a, b) => {
+    const [x, y] = [parts(a), parts(b)];
+    for (let i = 0; i < Math.min(x.length, y.length); i += 1) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+    return x.length - y.length;
+  });
+}
+function show(ctx, { project }) {
+  validateProjectName(project);
+  const statePath = sessionStatePath(ctx, project);
+  let session = {};
+  if (fs5.existsSync(statePath)) {
+    const doc = readState(statePath);
+    const data = doc.data;
+    session = {
+      current_step: data.current_step ?? 0,
+      iac_tool: data.iac_tool ?? "",
+      region: data.region ?? "",
+      updated: data.updated ?? "",
+      decisions: data.decisions ?? {},
+      open_findings: data.open_findings ?? [],
+      decision_log: data.decision_log ?? [],
+      steps: data.steps ?? {},
+      review_selections: data.review_selections ?? {},
+      metadata: data.metadata ?? {},
+      review_attempts: data.review_attempts ?? []
+    };
+    const effective = {};
+    for (const step of Object.keys(data.review_selections ?? {})) {
+      try {
+        const { selected, selection } = selectReplacementReview(ctx, project, step, {}, data);
+        watchReviewInputs(ctx, doc, project, step, selected);
+        if (doc.inputRevisions.get(selected) !== selection.stored.sha256) {
+          throw invalidInput("Selected review changed during validation");
+        }
+        const missing = findingsMissing(ctx, project, step, selected, data).blocked;
+        const error2 = missing ? "Selected review missing" : findingsInvalid(ctx, project, step, selected, data);
+        checkStateRevision(doc, statePath);
+        effective[step] = {
+          status: error2 ? "invalid" : "current",
+          error: error2,
+          input_coverage: "primary-and-review-guidance"
+        };
+      } catch (error2) {
+        effective[step] = { status: "invalid", error: error2.message };
+      }
+    }
+    session.effective_reviews = effective;
+    checkStateRevision(doc, statePath);
+  }
+  const artifacts = listArtifacts(ctx, project);
+  return {
+    project,
+    session,
+    artifacts,
+    artifact_count: artifacts.length,
+    state_status: Object.keys(session).length ? "present" : "missing"
+  };
+}
+function recoverState2(ctx, { project, reason }) {
+  validateProjectName(project);
+  return recoverState(sessionStatePath(ctx, project), project, reason);
+}
+
+// plugin/mcp/apex/src/core/index.mjs
+var SOURCE_APEX_ROOT = path6.resolve(path6.dirname(fileURLToPath2(__apexBundleUrl)), "../../../../..");
+function createContext({ workspace, apexRoot = SOURCE_APEX_ROOT } = {}) {
+  if (typeof workspace !== "string" || !workspace.trim()) {
+    throw invalidInput("workspace is required: the absolute path of the project folder that holds agent-output/");
+  }
+  if (!path6.isAbsolute(workspace)) {
+    throw invalidInput(`workspace must be an absolute path (got ${JSON.stringify(workspace)})`, {
+      remediation: "Pass the full path of the folder the session is working in."
+    });
+  }
+  let real;
+  try {
+    real = fs6.realpathSync.native(workspace);
+  } catch {
+    throw invalidInput(`workspace does not exist: ${workspace}`);
+  }
+  if (!fs6.statSync(real).isDirectory()) throw invalidInput(`workspace is not a folder: ${workspace}`);
+  return { workspace: real, apexRoot: path6.resolve(apexRoot) };
+}
+
+// plugin/mcp/apex/src/tools/common.mjs
+var import_ajv2 = __toESM(require_ajv2(), 1);
+var SERVER_VERSION = "0.1.0";
+var MAX_RESULT_BYTES = 20 * 1024;
+var ajv = new import_ajv2.default({ allErrors: true, strict: false, useDefaults: true });
+var WORKSPACE = {
+  type: "string",
+  description: "Absolute path of the project folder (the one that holds agent-output/). Required unless the host sets COPILOT_PROJECT_DIR."
+};
+var PROJECT = { type: "string", description: "Project name (folder under agent-output/)." };
+var STEP = {
+  type: "string",
+  enum: ["1", "2", "3", "3_5", "4", "5", "6", "7"],
+  description: "Workflow step key."
+};
+var NULLABLE_STRING = { anyOf: [{ type: "string" }, { type: "null" }] };
+var STRING_ARRAY = { type: "array", items: { type: "string" } };
+var OPEN_OBJECT = { type: "object", additionalProperties: true };
+function outputSchema(properties, required2 = [], { additionalProperties = false } = {}) {
+  return {
+    type: "object",
+    properties: { ...properties, truncated: { type: "boolean" } },
+    required: required2,
+    additionalProperties
+  };
+}
+var PAGED_RESULT = {
+  total: { type: "integer", minimum: 0 },
+  items: { type: "array", items: true },
+  next_cursor: NULLABLE_STRING
+};
+function objectSchema(properties, required2 = []) {
+  return { type: "object", properties: { workspace: WORKSPACE, ...properties }, required: required2, additionalProperties: false };
+}
+function validateArgs(tool, args) {
+  tool.validate ??= ajv.compile(tool.inputSchema);
+  const input = structuredClone(args ?? {});
+  if (!tool.validate(input)) {
+    const problems = tool.validate.errors.map((error2) => `${error2.instancePath || "/"} ${error2.message}`);
+    throw new ApexError("INVALID_INPUT", `Invalid arguments for ${tool.name}: ${problems.join("; ")}`, {
+      remediation: "Fix the listed arguments and call the tool again."
+    });
+  }
+  return input;
+}
+function compileOutput(tool) {
+  if (!tool.outputSchema || tool.outputSchema.type !== "object") {
+    throw new Error(`Tool ${tool.name} must declare an object outputSchema`);
+  }
+  tool.validateOutput ??= ajv.compile(tool.outputSchema);
+  return tool.validateOutput;
+}
+function assertToolOutputSchemas(tools) {
+  for (const tool of tools) compileOutput(tool);
+}
+function validateResult(tool, result) {
+  const validate2 = compileOutput(tool);
+  if (!validate2(result)) {
+    throw new ApexError(
+      "INTERNAL_ERROR",
+      `Tool ${tool.name} returned a result that does not match its output schema.`,
+      {
+        remediation: "Report this with the server log; no state was changed unless the result said so."
+      }
+    );
+  }
+  return result;
+}
+function contextFor(args, env) {
+  const workspace = args.workspace ?? env.projectDir ?? void 0;
+  return createContext({ workspace, apexRoot: env.apexRoot });
+}
+var byteLength = (value) => Buffer.byteLength(JSON.stringify(value), "utf8");
+function capResult(result) {
+  if (byteLength(result) <= MAX_RESULT_BYTES) return result;
+  const copy = structuredClone(result);
+  const shrink = (node2) => {
+    let changed = false;
+    if (Array.isArray(node2)) {
+      if (node2.length > 1) {
+        node2.splice(Math.ceil(node2.length / 2));
+        changed = true;
+      }
+      for (const item of node2) changed = shrink(item) || changed;
+    } else if (node2 && typeof node2 === "object") {
+      for (const [key, value] of Object.entries(node2)) {
+        if (typeof value === "string" && value.length > 500) {
+          node2[key] = `${value.slice(0, 500)}\u2026`;
+          changed = true;
+        } else changed = shrink(value) || changed;
+      }
+    }
+    return changed;
+  };
+  while (byteLength(copy) > MAX_RESULT_BYTES - 64 && shrink(copy)) ;
+  copy.truncated = true;
+  return copy;
+}
+
+// plugin/mcp/apex/src/tools/assets.mjs
+import fs7 from "node:fs";
+import path7 from "node:path";
+
 // node_modules/js-yaml/dist/js-yaml.mjs
 var NOT_RESOLVED = /* @__PURE__ */ Symbol("NOT_RESOLVED");
 function defineScalarTag(tagName, options) {
@@ -27926,7 +29935,7 @@ var seqTag = defineSequenceTag("tag:yaml.org,2002:seq", {
   },
   identify: Array.isArray
 });
-function isPlainObject3(data) {
+function isPlainObject4(data) {
   if (data === null || typeof data !== "object" || Array.isArray(data)) return false;
   const prototype = Object.getPrototypeOf(data);
   return prototype === null || prototype === Object.prototype;
@@ -27946,7 +29955,7 @@ var omapTag = defineSequenceTag("tag:yaml.org,2002:omap", {
     if (item instanceof Map) {
       if (item.size !== 1) return "cannot resolve an ordered map item";
       key = item.keys().next().value;
-    } else if (isPlainObject3(item)) {
+    } else if (isPlainObject4(item)) {
       const itemKeys = Object.keys(item);
       if (itemKeys.length !== 1) return "cannot resolve an ordered map item";
       key = itemKeys[0];
@@ -27978,7 +29987,7 @@ var pairsTag = defineSequenceTag("tag:yaml.org,2002:pairs", {
 });
 var mapTag = defineMappingTag("tag:yaml.org,2002:map", {
   create: () => ({}),
-  identify: isPlainObject3,
+  identify: isPlainObject4,
   represent: (o) => {
     const map = /* @__PURE__ */ new Map();
     for (const key of Object.keys(o)) map.set(key, o[key]);
@@ -28235,7 +30244,7 @@ var realMapTag = defineMappingTag("tag:yaml.org,2002:map", {
   has: (container, key) => container.has(key),
   keys: (container) => container.keys(),
   get: (container, key) => container.get(key),
-  identify: (data) => data instanceof Map || isPlainObject3(data),
+  identify: (data) => data instanceof Map || isPlainObject4(data),
   represent: (data) => {
     if (data instanceof Map) return data;
     const map = /* @__PURE__ */ new Map();
@@ -28258,7 +30267,7 @@ function normalizeKey(key) {
 }
 var legacyMapTag = defineMappingTag("tag:yaml.org,2002:map", {
   create: () => ({}),
-  identify: isPlainObject3,
+  identify: isPlainObject4,
   represent: (o) => {
     const map = /* @__PURE__ */ new Map();
     for (const key of Object.keys(o)) map.set(key, o[key]);
@@ -29765,7 +31774,7 @@ function loadDocuments(input, options = {}) {
     source
   });
 }
-function load(input, options) {
+function load2(input, options) {
   const documents = loadDocuments(input, options);
   if (documents.length === 0) throw new YAMLException("expected a document, but the input is empty");
   if (documents.length === 1) return documents[0];
@@ -29917,7 +31926,7 @@ function parseFrontmatter(content) {
   const match = content.match(FRONTMATTER);
   if (!match) return null;
   if (!match[1].trim()) return {};
-  const parsed = load(match[1], { schema: JSON_SCHEMA });
+  const parsed = load2(match[1], { schema: JSON_SCHEMA });
   if (parsed == null) return {};
   if (typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new TypeError("Frontmatter must be a YAML mapping");
@@ -29929,2028 +31938,7 @@ function parseFrontmatter(content) {
   return Object.fromEntries(entries);
 }
 
-// tools/scripts/_lib/review-transcript.mjs
-import { createHash as createHash2, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-var REVIEW_SCHEMA = "1.1";
-var REVIEWER = "rubber-duck";
-var REQUEST_SCHEMA = "apex-review-request-v1";
-var TRANSCRIPT_SCHEMA = "apex-review-transcript-v1";
-var REVIEWS_DIR = ".reviews";
-var NONCE_PATTERN = /^[0-9a-f]{16}$/;
-var REQUEST_FILE_PATTERN = /^request-([0-9a-f]{16})\.json$/;
-var TRANSCRIPT_FILE_PATTERN = /^rubber-duck-([0-9a-f]{16})-([0-9a-f]{12})\.md$/;
-var VALID_SEVERITY = /* @__PURE__ */ new Set(["must_fix", "should_fix", "suggestion"]);
-var VALID_ASSESSMENT = /* @__PURE__ */ new Set(["APPROVED", "NEEDS_REVISION", "BLOCKED"]);
-var VALID_RISK = /* @__PURE__ */ new Set(["high", "medium", "low"]);
-var FINDING_TEXT_FIELDS = ["category", "claim", "evidence", "impact", "artifact_section"];
-var sha256 = (value) => createHash2("sha256").update(value).digest("hex");
-function canonicalJson(value) {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-function reviewKeyFile(env = process.env) {
-  return env.APEX_REVIEW_KEY_FILE || path.join(os.homedir(), ".apex", "review-key");
-}
-function reviewKey({ env = process.env, create = true } = {}) {
-  const file = reviewKeyFile(env);
-  try {
-    return Buffer.from(fs.readFileSync(file, "utf8").trim(), "hex");
-  } catch (error2) {
-    if (error2.code !== "ENOENT" || !create) throw new Error(`Review key unavailable at ${file}`, { cause: error2 });
-  }
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 448 });
-  try {
-    fs.writeFileSync(file, `${randomBytes(32).toString("hex")}
-`, { flag: "wx", mode: 384 });
-  } catch (error2) {
-    if (error2.code !== "EEXIST") throw error2;
-  }
-  return Buffer.from(fs.readFileSync(file, "utf8").trim(), "hex");
-}
-function sign(record2, key) {
-  const { signature: _ignored, ...body } = record2;
-  return createHmac("sha256", key).update(canonicalJson(body)).digest("hex");
-}
-function verifySignature(record2, key) {
-  if (typeof record2?.signature !== "string" || !/^[0-9a-f]{64}$/.test(record2.signature)) return false;
-  const expected = Buffer.from(sign(record2, key), "hex");
-  return timingSafeEqual(expected, Buffer.from(record2.signature, "hex"));
-}
-function findingId(finding3) {
-  return sha256([finding3.category, finding3.claim, finding3.artifact_section].join("|")).slice(0, 8);
-}
-function parseReviewPayload(transcript) {
-  const blocks2 = [...String(transcript).matchAll(/```json[^\n]*\n([\s\S]*?)\n```/g)];
-  if (!blocks2.length) return { error: "the transcript has no ```json block with the review result" };
-  let payload;
-  try {
-    payload = JSON.parse(blocks2.at(-1)[1]);
-  } catch (error2) {
-    return { error: `the review result JSON does not parse (${error2.message})` };
-  }
-  const problems = [];
-  if (!payload || typeof payload !== "object") return { error: "the review result is not a JSON object" };
-  if (!VALID_ASSESSMENT.has(payload.overall_assessment)) problems.push("overall_assessment");
-  if (!VALID_RISK.has(payload.risk_level)) problems.push("risk_level");
-  if (!Array.isArray(payload.findings)) problems.push("findings");
-  for (const [index, finding3] of (Array.isArray(payload.findings) ? payload.findings : []).entries()) {
-    if (!finding3 || typeof finding3 !== "object") {
-      problems.push(`findings[${index}]`);
-      continue;
-    }
-    if (!VALID_SEVERITY.has(finding3.severity)) problems.push(`findings[${index}].severity`);
-    for (const field of FINDING_TEXT_FIELDS) {
-      if (typeof finding3[field] !== "string" || !finding3[field].trim()) problems.push(`findings[${index}].${field}`);
-    }
-    if (finding3.severity === "must_fix" && typeof finding3.suggested_fix?.proposed_edit !== "string") {
-      problems.push(`findings[${index}].suggested_fix.proposed_edit`);
-    }
-  }
-  if (problems.length) return { error: `the review result is missing or has invalid: ${problems.join(", ")}` };
-  return { payload };
-}
-function buildSidecar({ request, transcriptPath, transcriptText, requestPath, guidance }) {
-  const parsed = parseReviewPayload(transcriptText);
-  if (parsed.error) throw new Error(parsed.error);
-  const { payload } = parsed;
-  const findings = payload.findings.map((raw) => {
-    const finding3 = {
-      severity: raw.severity,
-      category: raw.category.trim(),
-      claim: raw.claim.trim(),
-      evidence: raw.evidence.trim(),
-      impact: raw.impact.trim(),
-      artifact_section: raw.artifact_section.trim(),
-      traces_to: Array.isArray(raw.traces_to) ? raw.traces_to.filter((item) => typeof item === "string") : []
-    };
-    if (raw.suggested_fix && typeof raw.suggested_fix === "object") {
-      finding3.suggested_fix = {
-        artifact_path: typeof raw.suggested_fix.artifact_path === "string" && raw.suggested_fix.artifact_path.trim() ? raw.suggested_fix.artifact_path.trim() : request.artifact,
-        proposed_edit: String(raw.suggested_fix.proposed_edit ?? "")
-      };
-    }
-    if (typeof raw.requires_step === "string" && raw.requires_step.trim()) finding3.requires_step = raw.requires_step;
-    return { id: findingId(finding3), ...finding3 };
-  });
-  const count = (severity) => findings.filter((finding3) => finding3.severity === severity).length;
-  const cache2 = {
-    artifact_sha: request.artifact_sha256,
-    checklists_sha: guidance.checklists_sha,
-    protocol_sha: guidance.protocol_sha,
-    reviewer: REVIEWER
-  };
-  return {
-    schema_version: REVIEW_SCHEMA,
-    reviewer: REVIEWER,
-    challenged_artifact: request.artifact,
-    artifact_type: request.artifact_type,
-    review_focus: request.review_focus,
-    pass_number: request.pass_number,
-    overall_assessment: payload.overall_assessment,
-    risk_level: payload.risk_level,
-    challenge_summary: typeof payload.summary === "string" ? payload.summary.trim() : "",
-    must_fix_count: count("must_fix"),
-    should_fix_count: count("should_fix"),
-    suggestion_count: count("suggestion"),
-    findings,
-    review_request: { path: requestPath, nonce: request.nonce, prompt_sha256: request.prompt_sha256 },
-    transcript: { path: transcriptPath, sha256: sha256(transcriptText), request_sha256: request.prompt_sha256 },
-    cache_inputs: { ...cache2, artifact_hash: sha256(Object.values(cache2).join("\n---\n")) }
-  };
-}
-var serializeSidecar = (sidecar) => `${JSON.stringify(sidecar, null, 2)}
-`;
-function assertPlainDirectories(root, dir) {
-  const relative = path.relative(root, dir);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error(`${dir} is outside ${root}`);
-  let current = root;
-  for (const part of relative.split(path.sep).filter(Boolean)) {
-    current = path.join(current, part);
-    const stat = fs.lstatSync(current);
-    if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error(`Not a plain folder: ${current}`);
-  }
-}
-function readRegularFile(file) {
-  const stat = fs.lstatSync(file);
-  if (stat.isSymbolicLink() || !stat.isFile()) throw new Error(`Not a regular file: ${file}`);
-  return fs.readFileSync(file);
-}
-function projectOf(relative) {
-  const parts = String(relative).split("/");
-  return parts[0] === "agent-output" && parts.length >= 3 && /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/.test(parts[1]) ? parts[1] : null;
-}
-function verifyTranscriptReview(sidecarFile, doc, { root, guidance, artifactSha: artifactSha2, key }) {
-  const problems = [];
-  const fail = (message) => problems.push(message);
-  const project = projectOf(doc.challenged_artifact);
-  if (!project) return [`challenged_artifact must be agent-output/<project>/<file> (got ${doc.challenged_artifact})`];
-  if (doc.reviewer !== REVIEWER) fail(`reviewer must be "${REVIEWER}"`);
-  const reviewsRel = `agent-output/${project}/${REVIEWS_DIR}`;
-  const transcriptRel = doc.transcript?.path;
-  const requestRel = doc.review_request?.path;
-  const transcriptName = typeof transcriptRel === "string" ? transcriptRel.slice(reviewsRel.length + 1) : "";
-  const requestName = typeof requestRel === "string" ? requestRel.slice(reviewsRel.length + 1) : "";
-  if (!transcriptRel?.startsWith(`${reviewsRel}/`) || !TRANSCRIPT_FILE_PATTERN.test(transcriptName)) {
-    return [...problems, `transcript.path must be ${reviewsRel}/rubber-duck-<nonce>-<hash>.md`];
-  }
-  if (!requestRel?.startsWith(`${reviewsRel}/`) || !REQUEST_FILE_PATTERN.test(requestName)) {
-    return [...problems, `review_request.path must be ${reviewsRel}/request-<nonce>.json`];
-  }
-  const reviewsDir = path.join(root, "agent-output", project, REVIEWS_DIR);
-  let request;
-  let meta2;
-  let transcriptText;
-  try {
-    assertPlainDirectories(root, reviewsDir);
-    request = JSON.parse(readRegularFile(path.join(reviewsDir, requestName)).toString("utf8"));
-    const transcriptBytes = readRegularFile(path.join(reviewsDir, transcriptName));
-    transcriptText = transcriptBytes.toString("utf8");
-    meta2 = JSON.parse(
-      readRegularFile(path.join(reviewsDir, transcriptName.replace(/\.md$/, ".json"))).toString("utf8")
-    );
-    if (sha256(transcriptBytes) !== doc.transcript.sha256) fail("transcript bytes do not match transcript.sha256");
-  } catch (error2) {
-    return [...problems, `review evidence unreadable: ${error2.message}`];
-  }
-  const nonce = REQUEST_FILE_PATTERN.exec(requestName)[1];
-  if (request.schema !== REQUEST_SCHEMA || !verifySignature(request, key)) fail("review request signature is invalid");
-  if (meta2.schema !== TRANSCRIPT_SCHEMA || !verifySignature(meta2, key))
-    fail("transcript metadata signature is invalid");
-  if (request.nonce !== nonce || meta2.nonce !== nonce || TRANSCRIPT_FILE_PATTERN.exec(transcriptName)[1] !== nonce) {
-    fail("transcript, metadata and request do not share one nonce");
-  }
-  if (request.project !== project || meta2.project !== project) fail("review evidence belongs to another project");
-  if (request.artifact !== doc.challenged_artifact || meta2.artifact !== doc.challenged_artifact) {
-    fail("review evidence belongs to another artifact");
-  }
-  if (meta2.transcript !== transcriptName) fail("transcript metadata names another file");
-  if (meta2.response_sha256 !== doc.transcript.sha256) fail("transcript metadata hash does not match");
-  if (meta2.request_sha256 !== request.prompt_sha256 || doc.transcript.request_sha256 !== request.prompt_sha256) {
-    fail("the reviewed prompt is not the issued review request");
-  }
-  if (meta2.artifact_sha256 !== request.artifact_sha256) fail("the reviewer saw another version of the artifact");
-  if (artifactSha2 !== request.artifact_sha256) fail("the artifact changed after the review; request a new review");
-  for (const field of ["artifact_type", "review_focus", "pass_number"]) {
-    if (request[field] !== doc[field]) fail(`${field} does not match the review request`);
-  }
-  if (path.basename(sidecarFile) !== request.sidecar) fail("the sidecar file name does not match the review request");
-  if (problems.length) return problems;
-  try {
-    const expected = buildSidecar({
-      request,
-      transcriptPath: transcriptRel,
-      transcriptText,
-      requestPath: requestRel,
-      guidance
-    });
-    if (canonicalJson(expected) !== canonicalJson(doc)) {
-      fail("the sidecar does not match the findings in its transcript; record it again with recordReview");
-    }
-  } catch (error2) {
-    fail(`the transcript cannot be imported: ${error2.message}`);
-  }
-  const projectDir2 = path.dirname(reviewsDir);
-  for (const name of fs.readdirSync(projectDir2).sort()) {
-    if (!/^challenge-findings-.*\.json$/.test(name) || name.endsWith("-decisions.json")) continue;
-    if (path.resolve(projectDir2, name) === path.resolve(sidecarFile) || name === request.sidecar) continue;
-    try {
-      const other = JSON.parse(fs.readFileSync(path.join(projectDir2, name), "utf8"));
-      if (other?.transcript?.path === transcriptRel) fail(`the transcript is already cited by ${name}`);
-    } catch {
-    }
-  }
-  return problems;
-}
-
-// tools/scripts/validate-challenger-findings.mjs
-var ROOT = "agent-output";
-var REQUIRED_TOP_LEVEL = [
-  "schema_version",
-  "challenged_artifact",
-  "artifact_type",
-  "review_focus",
-  "pass_number",
-  "risk_level",
-  "must_fix_count",
-  "should_fix_count",
-  "suggestion_count",
-  "findings",
-  "cache_inputs"
-];
-var REQUIRED_FINDING_FIELDS = [
-  "id",
-  "severity",
-  "category",
-  "claim",
-  "evidence",
-  "impact",
-  "artifact_section",
-  "traces_to"
-];
-var REQUIRED_CACHE_FIELDS = [
-  "artifact_sha",
-  "checklists_sha",
-  "protocol_sha",
-  "subagent_sha",
-  "model",
-  "artifact_hash"
-];
-var REQUIRED_CACHE_FIELDS_V11 = ["artifact_sha", "checklists_sha", "protocol_sha", "reviewer", "artifact_hash"];
-var SUPPORTED_SCHEMAS = /* @__PURE__ */ new Set(["1.0", "1.1"]);
-var WORKER_GUIDANCE = ".github/agents/_subagents/challenger-review-subagent.agent.md";
-var CHECKLISTS_GUIDANCE = ".github/skills/apex-azure-defaults/references/adversarial-checklists.md";
-var PROTOCOL_GUIDANCE = ".github/skills/apex-azure-defaults/references/adversarial-review-protocol.md";
-var VALID_SEVERITY2 = /* @__PURE__ */ new Set(["must_fix", "should_fix", "suggestion"]);
-var r;
-function findingId2(finding3) {
-  for (const field of ["category", "claim", "artifact_section"]) {
-    if (typeof finding3?.[field] !== "string" || !finding3[field]) {
-      throw new Error(`Finding identity requires ${field}`);
-    }
-  }
-  return createHash3("sha256").update([finding3.category, finding3.claim, finding3.artifact_section].join("|")).digest("hex").slice(0, 8);
-}
-function artifactSha(artifactPath2, root = process.cwd()) {
-  const hash = (bytes) => createHash3("sha256").update(bytes).digest("hex");
-  const artifact = path2.resolve(root, artifactPath2);
-  const entries = [];
-  const ignored = /* @__PURE__ */ new Set([".git", ".terraform", "node_modules", ".venv", "__pycache__"]);
-  const visit = (target) => {
-    const stat = fs2.lstatSync(target);
-    if (stat.isSymbolicLink()) throw new Error(`Review artifacts cannot contain symlinks: ${target}`);
-    if (stat.isDirectory()) {
-      for (const name of fs2.readdirSync(target).sort()) {
-        if (!ignored.has(name)) visit(path2.join(target, name));
-      }
-    } else if (stat.isFile()) {
-      entries.push([path2.relative(artifact, target).split(path2.sep).join("/"), hash(fs2.readFileSync(target))]);
-    } else throw new Error(`Unsupported review artifact: ${target}`);
-  };
-  visit(artifact);
-  if (!entries.length) throw new Error("Review artifact directory contains no files");
-  return fs2.lstatSync(artifact).isDirectory() ? hash(JSON.stringify(entries)) : entries[0][1];
-}
-function guidanceHashes(guidanceRoot = process.cwd()) {
-  const hash = (relative) => createHash3("sha256").update(fs2.readFileSync(path2.resolve(guidanceRoot, relative))).digest("hex");
-  return { checklists_sha: hash(CHECKLISTS_GUIDANCE), protocol_sha: hash(PROTOCOL_GUIDANCE) };
-}
-function cacheInputs(artifactPath2, root = process.cwd(), guidanceRoot = root) {
-  const read = (relative) => fs2.readFileSync(path2.resolve(guidanceRoot, relative));
-  const hash = (bytes) => createHash3("sha256").update(bytes).digest("hex");
-  const artifactShaValue = artifactSha(artifactPath2, root);
-  if (!fs2.existsSync(path2.resolve(guidanceRoot, WORKER_GUIDANCE))) {
-    throw new Error(
-      "legacy schema 1.0 review cannot be verified here (the challenger-review-subagent worker is not installed); run a new review"
-    );
-  }
-  const worker = read(WORKER_GUIDANCE);
-  const models = parseFrontmatter(worker.toString("utf8"))?.model;
-  const model = Array.isArray(models) ? models[0] : null;
-  if (typeof model !== "string" || !model) throw new Error("Missing reviewer frontmatter model");
-  const inputs = {
-    artifact_sha: artifactShaValue,
-    checklists_sha: hash(read(CHECKLISTS_GUIDANCE)),
-    protocol_sha: hash(read(PROTOCOL_GUIDANCE)),
-    subagent_sha: hash(worker),
-    model
-  };
-  return { ...inputs, artifact_hash: hash(Object.values(inputs).join("\n---\n")) };
-}
-function verifyTranscriptCache(file, doc, root, guidanceRoot) {
-  const guidance = guidanceHashes(guidanceRoot);
-  const current = artifactSha(doc.challenged_artifact, root);
-  for (const [field, value] of Object.entries({ artifact_sha: current, ...guidance, reviewer: REVIEWER })) {
-    if (doc.cache_inputs?.[field] !== value) r.error(`${file}: stale cache_inputs.${field}`);
-  }
-  let key;
-  try {
-    key = reviewKey({ create: false });
-  } catch (error2) {
-    r.error(`${file}: ${error2.message}; transcript-backed reviews cannot be verified`);
-    return;
-  }
-  const problems = verifyTranscriptReview(path2.resolve(root, file), doc, {
-    root: path2.resolve(root),
-    guidance,
-    artifactSha: current,
-    key
-  });
-  for (const problem3 of problems) r.error(`${file}: ${problem3}`);
-}
-function verifyCache(file, doc, root = process.cwd(), guidanceRoot = root) {
-  if (doc.schema_version === "1.1") {
-    verifyTranscriptCache(file, doc, root, guidanceRoot);
-    return;
-  }
-  const expected = cacheInputs(doc.challenged_artifact, root, guidanceRoot);
-  for (const [field, value] of Object.entries(expected)) {
-    if (doc.cache_inputs?.[field] !== value) r.error(`${file}: stale cache_inputs.${field}`);
-  }
-  if (doc.supporting_inputs !== void 0) {
-    if (!Array.isArray(doc.supporting_inputs) || doc.supporting_inputs.length === 0) {
-      r.error(`${file}: supporting_inputs must be a nonempty array when declared`);
-    } else {
-      const seen = /* @__PURE__ */ new Set();
-      for (const input of doc.supporting_inputs) {
-        try {
-          if (!input || typeof input.path !== "string" || !/^[a-f0-9]{64}$/.test(input.sha256 || "")) {
-            throw new Error("invalid supporting input record");
-          }
-          const resolved = path2.resolve(root, input.path);
-          if (seen.has(resolved)) throw new Error("duplicate supporting input");
-          seen.add(resolved);
-          if (cacheInputs(input.path, root, guidanceRoot).artifact_sha !== input.sha256) {
-            throw new Error("supporting bytes changed");
-          }
-        } catch (error2) {
-          r.error(`${file}: invalid supporting input: ${error2.message}`);
-        }
-      }
-    }
-  }
-  for (const [index, finding3] of doc.findings.entries()) {
-    if (finding3.id !== findingId2(finding3)) r.error(`${file}: findings[${index}].id does not match identity`);
-  }
-  for (const severity of VALID_SEVERITY2) {
-    const count = doc.findings.filter((finding3) => finding3.severity === severity).length;
-    if (doc[`${severity}_count`] !== count) r.error(`${file}: ${severity}_count does not match findings`);
-  }
-}
-function walk(dir, acc = []) {
-  if (!fs2.existsSync(dir)) return acc;
-  for (const entry of fs2.readdirSync(dir, { withFileTypes: true })) {
-    const full = path2.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (entry.name === "_meta") continue;
-      walk(full, acc);
-    } else if (entry.isFile() && entry.name.startsWith("challenge-findings-") && entry.name.endsWith(".json") && !entry.name.endsWith("-decisions.json")) {
-      acc.push(full);
-    }
-  }
-  return acc;
-}
-function isNonEmptyString(v) {
-  return typeof v === "string" && v.length > 0;
-}
-function validateFinding(file, finding3, idx) {
-  const where = `${file} findings[${idx}]`;
-  for (const f of REQUIRED_FINDING_FIELDS) {
-    if (!(f in finding3)) {
-      r.error(`${where}: missing required field "${f}"`);
-    }
-  }
-  if (!VALID_SEVERITY2.has(finding3.severity)) {
-    r.error(`${where}: severity "${finding3.severity}" is not one of ${[...VALID_SEVERITY2].join(", ")}`);
-  }
-  if (!Array.isArray(finding3.traces_to)) {
-    r.error(`${where}: traces_to must be an array (got ${typeof finding3.traces_to})`);
-  }
-  if (finding3.severity === "must_fix") {
-    const sf = finding3.suggested_fix;
-    if (!sf || typeof sf !== "object") {
-      r.error(`${where}: must_fix findings require a suggested_fix object`);
-    } else {
-      if (!isNonEmptyString(sf.artifact_path)) {
-        r.error(`${where}: suggested_fix.artifact_path missing or empty`);
-      }
-      if (!isNonEmptyString(sf.proposed_edit)) {
-        r.error(`${where}: suggested_fix.proposed_edit missing or empty`);
-      }
-    }
-  }
-  if (finding3.requires_step !== void 0 && !isNonEmptyString(finding3.requires_step)) {
-    r.error(`${where}: requires_step, when present, must be a non-empty string`);
-  }
-}
-function validateFindings(file, doc) {
-  if (doc?.batch_results !== void 0) {
-    const entries = Array.isArray(doc.batch_results) ? doc.batch_results : [];
-    if (doc.schema_version === "1.1" || entries.some((entry) => entry?.schema_version === "1.1")) {
-      r.error(`${file}: schema 1.1 reviews are single-lens; batch_results is not allowed`);
-      return;
-    }
-  }
-  if (Array.isArray(doc.batch_results)) {
-    for (const [i, entry] of doc.batch_results.entries()) {
-      validateFindings(`${file} batch_results[${i}]`, entry);
-    }
-    return;
-  }
-  for (const f of REQUIRED_TOP_LEVEL) {
-    if (!(f in doc)) {
-      r.error(`${file}: missing required top-level field "${f}"`);
-    }
-  }
-  if (!SUPPORTED_SCHEMAS.has(doc.schema_version)) {
-    r.error(`${file}: schema_version must be "1.0" or "1.1" (got ${JSON.stringify(doc.schema_version)})`);
-  }
-  if (doc.schema_version === "1.1") {
-    if (Array.isArray(doc.batch_results))
-      r.error(`${file}: schema 1.1 reviews are single-lens; batch_results is not allowed`);
-    if (doc.reviewer !== REVIEWER) r.error(`${file}: reviewer must be "${REVIEWER}"`);
-    for (const [object2, fields] of [
-      ["transcript", ["path", "sha256", "request_sha256"]],
-      ["review_request", ["path", "nonce", "prompt_sha256"]]
-    ]) {
-      for (const field of fields) {
-        if (!isNonEmptyString(doc[object2]?.[field])) r.error(`${file}: ${object2}.${field} missing or empty`);
-      }
-    }
-  }
-  if (!Array.isArray(doc.findings)) {
-    r.error(`${file}: findings must be an array`);
-  } else {
-    for (const [i, finding3] of doc.findings.entries()) {
-      validateFinding(file, finding3, i);
-    }
-  }
-  if (doc.cache_inputs && typeof doc.cache_inputs === "object") {
-    for (const f of doc.schema_version === "1.1" ? REQUIRED_CACHE_FIELDS_V11 : REQUIRED_CACHE_FIELDS) {
-      if (!isNonEmptyString(doc.cache_inputs[f])) {
-        r.error(`${file}: cache_inputs.${f} missing or empty`);
-      }
-    }
-  }
-}
-function verifyReviewFile(file, { root = process.cwd(), guidanceRoot = root } = {}) {
-  const errors = [];
-  const previous = r;
-  r = { error: (...parts) => errors.push(parts.join(": ")), warn() {
-  } };
-  try {
-    const doc = JSON.parse(fs2.readFileSync(path2.resolve(root, file), "utf-8"));
-    validateFindings(file, doc);
-    const entries = Array.isArray(doc.batch_results) ? doc.batch_results : [doc];
-    if (entries.length === 0) throw new Error("Empty batch cannot prove a current review");
-    for (const entry of entries) verifyCache(file, entry, root, guidanceRoot);
-  } catch (error2) {
-    errors.push(`${file}: invalid findings payload (${error2.message})`);
-  } finally {
-    r = previous;
-  }
-  return errors;
-}
-function runValidator(args = process.argv.slice(2)) {
-  r = new Reporter("Challenger Findings Validator");
-  const files = /* @__PURE__ */ new Set();
-  let verifyCurrent = false;
-  try {
-    const { values, positionals } = parseArgs({
-      args,
-      options: {
-        root: { type: "string" },
-        path: { type: "string", multiple: true },
-        metadata: { type: "string" },
-        "finding-ids": { type: "string" },
-        "verify-cache": { type: "boolean" },
-        "supporting-input": { type: "string", multiple: true },
-        help: { type: "boolean" }
-      },
-      allowPositionals: true
-    });
-    if (values.help) {
-      console.log(
-        "Usage: validate-challenger-findings.mjs [--root DIR | --path FILE | FILE ...] [--verify-cache]\nRead-only metadata: --metadata ARTIFACT [--supporting-input PATH ...] [--finding-ids DRAFT.json.tmp]\nMetadata hashes file bytes or sorted directory entries using the reviewer frontmatter model.\nUse --verify-cache for current review gates, not historical schema-only scans."
-      );
-      return 0;
-    }
-    if (values.metadata !== void 0 || values["finding-ids"] !== void 0) {
-      if (values.root !== void 0 || values.path || positionals.length || values["verify-cache"]) {
-        throw new Error("Metadata output cannot be combined with validation inputs");
-      }
-      const metadata = {};
-      if (values.metadata !== void 0) metadata.cache_inputs = cacheInputs(values.metadata);
-      if (values["supporting-input"]) {
-        if (values.metadata === void 0) throw new Error("--supporting-input requires --metadata");
-        metadata.supporting_inputs = [...new Set(values["supporting-input"])].map((input) => ({
-          path: input,
-          sha256: cacheInputs(input).artifact_sha
-        }));
-      }
-      if (values["finding-ids"] !== void 0) {
-        const draft = JSON.parse(fs2.readFileSync(values["finding-ids"], "utf8"));
-        const identities = (entry) => entry.findings.map((finding3, index) => ({ index, id: findingId2(finding3) }));
-        if (Array.isArray(draft.batch_results)) metadata.batch_results = draft.batch_results.map(identities);
-        else metadata.finding_ids = identities(draft);
-      }
-      console.log(JSON.stringify(metadata, null, 2));
-      return 0;
-    }
-    if (values["supporting-input"]) throw new Error("--supporting-input requires --metadata");
-    verifyCurrent = values["verify-cache"] ?? false;
-    const requested = [...values.path ?? [], ...positionals];
-    if (values.root !== void 0) requested.unshift(values.root);
-    if (requested.length === 0) {
-      for (const file of walk(ROOT)) files.add(file);
-    } else {
-      for (const target of requested) {
-        try {
-          if (!target) throw new Error("input path must not be empty");
-          const stat = fs2.statSync(target);
-          if (target === values.root && !stat.isDirectory()) {
-            throw new Error("--root must be a directory");
-          }
-          if (stat.isFile()) {
-            files.add(path2.resolve(target));
-          } else if (stat.isDirectory()) {
-            for (const file of walk(target)) files.add(path2.resolve(file));
-          } else {
-            throw new Error("input must be a regular file or directory");
-          }
-        } catch (error2) {
-          r.error(target, `cannot inspect input (${error2.message})`);
-        }
-      }
-    }
-  } catch (error2) {
-    r.error(`Invalid arguments or scan failure: ${error2.message}`);
-  }
-  if (files.size === 0 && r.errors === 0) {
-    console.log("  \u26A0\uFE0F  No challenger findings sidecars found in scan directories \u2014 nothing to validate.\n");
-  }
-  for (const file of files) {
-    let raw;
-    try {
-      raw = fs2.readFileSync(file, "utf-8");
-    } catch (e) {
-      r.error(`${file}: cannot read (${e.message})`);
-      continue;
-    }
-    let doc;
-    try {
-      doc = JSON.parse(raw);
-    } catch (e) {
-      r.error(`${file}: invalid JSON (${e.message})`);
-      continue;
-    }
-    try {
-      validateFindings(file, doc);
-      if (verifyCurrent) {
-        const entries = Array.isArray(doc.batch_results) ? doc.batch_results : [doc];
-        if (entries.length === 0) throw new Error("Empty batch cannot prove a current review");
-        for (const entry of entries) verifyCache(file, entry);
-      }
-    } catch (error2) {
-      r.error(`${file}: invalid findings payload (${error2.message})`);
-    }
-  }
-  console.log(`  Scanned ${files.size} findings sidecar(s)`);
-  if (verifyCurrent && files.size === 0) r.error("No findings scanned for current review verification");
-  r.summary();
-  return r.errors > 0 ? 1 : 0;
-}
-if (process.argv[1] && path2.resolve(process.argv[1]) === fileURLToPath(__apexBundleUrl)) {
-  process.exit(runValidator());
-}
-
-// plugin/mcp/apex/src/core/state.mjs
-import { createHash as createHash4, randomBytes as randomBytes2 } from "node:crypto";
-import fs3 from "node:fs";
-import path3 from "node:path";
-var STEP_ORDER = ["1", "3_5", "2", "3", "4", "5", "6", "7"];
-var VALID_STEP_KEYS = new Set(STEP_ORDER);
-var STEP_TO_INT = { 1: 1, 2: 2, 3: 3, "3_5": 3, 4: 4, 5: 5, 6: 6, 7: 7 };
-var SUPPORTED_SCHEMAS2 = /* @__PURE__ */ new Set(["1.0", "2.0", "3.0", "session-state-v3"]);
-var PROJECT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
-var RETRYABLE_RENAME = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
-var STALE_LOCK_MS = 6e4;
-var STATE_FILE = "00-session-state.json";
-var CHANGE_LOG_FILE = ".session-changes.jsonl";
-var STEP_NAMES = [
-  ["1", "Requirements", "02-Requirements"],
-  ["3_5", "Governance", "04g-Governance"],
-  ["2", "Architecture", "03-Architect"],
-  ["3", "Design", "04-Design"],
-  ["4", "IaC Plan", ""],
-  ["5", "IaC Code", ""],
-  ["6", "Deploy", ""],
-  ["7", "As-Built", "08-As-Built"]
-];
-var REVIEW_AUDIT_KEYS = ["1", "2", "4", "5", "6"];
-function stepTemplate() {
-  return Object.fromEntries(
-    STEP_NAMES.map(([key, name, agent]) => [
-      key,
-      {
-        name,
-        agent,
-        status: "pending",
-        sub_step: null,
-        started: null,
-        completed: null,
-        artifacts: [],
-        context_files_used: []
-      }
-    ])
-  );
-}
-function reviewAuditTemplate() {
-  return Object.fromEntries(
-    REVIEW_AUDIT_KEYS.map((key) => [
-      `step_${key}`,
-      { complexity: "", passes_planned: 0, passes_executed: 0, skipped: [], skip_reasons: [], models_used: [] }
-    ])
-  );
-}
-function makeTemplate(project) {
-  return {
-    schema_version: "3.0",
-    project,
-    iac_tool: "",
-    region: "swedencentral",
-    branch: "main",
-    updated: "",
-    current_step: 0,
-    decisions: {
-      region: "swedencentral",
-      compliance: "",
-      budget: "",
-      architecture_pattern: "",
-      deployment_strategy: "",
-      complexity: ""
-    },
-    open_findings: [],
-    decision_log: [],
-    review_audit: reviewAuditTemplate(),
-    steps: stepTemplate()
-  };
-}
-function isoNow() {
-  return (/* @__PURE__ */ new Date()).toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-function validateStepKey(step) {
-  const value = String(step ?? "").trim();
-  if (!VALID_STEP_KEYS.has(value)) {
-    throw invalidInput(`Invalid step key '${value}'. Valid keys: ${[...VALID_STEP_KEYS].sort().join(", ")}`);
-  }
-  return value;
-}
-function stepToInt(step) {
-  return STEP_TO_INT[step] ?? 0;
-}
-function validateProjectName(project) {
-  if (typeof project !== "string" || !PROJECT_PATTERN.test(project) || project.includes("..")) {
-    throw invalidInput(`Invalid project name: ${JSON.stringify(project)}`, {
-      remediation: "Use letters, digits, '.', '_' or '-' (max 100 characters)."
-    });
-  }
-  return project;
-}
-function rejectSymlink(target) {
-  let stat;
-  try {
-    stat = fs3.lstatSync(target);
-  } catch {
-    return;
-  }
-  if (stat.isSymbolicLink()) {
-    throw invalidInput(`Symlinks are not allowed in the project path: ${target}`, {
-      remediation: "Replace the link with a real folder inside the workspace."
-    });
-  }
-}
-function projectDir(ctx, project) {
-  const outputDir = path3.join(ctx.workspace, "agent-output");
-  const dir = path3.join(outputDir, validateProjectName(project));
-  rejectSymlink(outputDir);
-  rejectSymlink(dir);
-  return dir;
-}
-function sessionStatePath(ctx, project) {
-  const statePath = path3.join(projectDir(ctx, project), STATE_FILE);
-  rejectSymlink(statePath);
-  return statePath;
-}
-var sha2562 = (bytes) => createHash4("sha256").update(bytes).digest("hex");
-function fileRevision(target) {
-  let stat;
-  try {
-    stat = fs3.lstatSync(target);
-  } catch (error2) {
-    if (error2.code === "ENOENT") return null;
-    throw error2;
-  }
-  if (stat.isSymbolicLink()) throw invalidInput(`Symlink cannot be a revision input: ${target}`);
-  if (!stat.isDirectory()) return sha2562(fs3.readFileSync(target));
-  const ignored = /* @__PURE__ */ new Set([".git", ".terraform", "node_modules", ".venv", "__pycache__"]);
-  const entries = [];
-  const visit = (directory) => {
-    for (const name of fs3.readdirSync(directory).sort()) {
-      if (ignored.has(name)) continue;
-      const child = path3.join(directory, name);
-      const childStat = fs3.lstatSync(child);
-      if (childStat.isSymbolicLink()) throw invalidInput(`Symlink cannot be a revision input: ${child}`);
-      if (childStat.isDirectory()) visit(child);
-      else if (childStat.isFile()) {
-        entries.push([path3.relative(target, child).split(path3.sep).join("/"), fileRevision(child)]);
-      } else throw invalidInput(`Unsupported revision input: ${child}`);
-    }
-  };
-  visit(target);
-  return sha2562(Buffer.from(JSON.stringify(entries), "utf8"));
-}
-function isPlainObject4(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-function validateState(data) {
-  const fail = (message) => {
-    throw new ApexError("STATE_INVALID", message, {
-      remediation: "Recover the state from its backup (recoverState) or ask the owner to repair it."
-    });
-  };
-  if (!isPlainObject4(data) || typeof data.project !== "string" || !data.project) {
-    fail("State recovery required: missing project identity");
-  }
-  if (!SUPPORTED_SCHEMAS2.has(String(data.schema_version ?? "1.0"))) {
-    fail("Unsupported state schema; owner migration required");
-  }
-  const steps = data.steps ?? {};
-  if (!isPlainObject4(steps) || !Number.isInteger(data.current_step) || data.current_step < 0 || data.current_step > 7) {
-    fail("State recovery required: invalid steps/current_step");
-  }
-  if (Object.entries(steps).some(([key, value]) => !VALID_STEP_KEYS.has(key) || !isPlainObject4(value))) {
-    fail("State recovery required: invalid step entry");
-  }
-  const attempts = data.review_attempts ?? [];
-  const attemptKeys = ["id", "step", "kind", "input_digest", "outcome", "retry_of", "recorded_at"];
-  if (!Array.isArray(attempts) || attempts.some(
-    (attempt) => !isPlainObject4(attempt) || attempt.schema_version !== "review-attempt-v1" || !attemptKeys.every((key) => key in attempt)
-  )) {
-    fail("Invalid review attempt history");
-  }
-  const selections = data.review_selections ?? {};
-  if (!isPlainObject4(selections)) fail("Invalid review selection map; owner migration required");
-  for (const [step, record2] of Object.entries(selections)) {
-    if (step !== "4" || !isPlainObject4(record2)) fail("Invalid review selection record");
-    const expectedFocus = "comprehensive";
-    if (record2.schema_version !== "review-selection-v1" || record2.review_focus !== expectedFocus || record2.input_coverage !== "primary-and-review-guidance" || !Number.isInteger(record2.pass_number) || record2.pass_number < 2 || typeof record2.path !== "string" || !record2.path || typeof record2.selected_at !== "string" || !record2.selected_at || typeof record2.sha256 !== "string" || record2.sha256.length !== 64) {
-      fail("Unsupported or malformed review-selection-v1 record");
-    }
-  }
-}
-function pythonFloat(value) {
-  const text = String(value).trim().toLowerCase();
-  if (/^[+-]?(inf|infinity|nan)$/.test(text))
-    return Number.parseFloat(text.replace("infinity", "inf").replace("inf", "Infinity"));
-  return /^[+-]?(\d+(_?\d+)*\.?\d*|\.\d+)(e[+-]?\d+)?$/.test(text) ? Number(text.replaceAll("_", "")) : null;
-}
-function migrateToV3(data) {
-  const parsed = pythonFloat(data.schema_version ?? "1.0");
-  if ((parsed ?? 1) >= 3) return data;
-  const setDefault = (key, value) => {
-    if (!(key in data)) data[key] = value;
-  };
-  data.schema_version = "3.0";
-  setDefault("decision_log", []);
-  setDefault("review_audit", reviewAuditTemplate());
-  setDefault("open_findings", []);
-  setDefault("decisions", {});
-  setDefault("steps", stepTemplate());
-  const template = stepTemplate();
-  for (const key of STEP_ORDER) {
-    if (!(key in data.steps)) data.steps[key] = template[key];
-  }
-  return data;
-}
-function readState(statePath) {
-  let content;
-  try {
-    content = fs3.readFileSync(statePath);
-  } catch (error2) {
-    if (error2.code === "ENOENT") {
-      throw new ApexError("STATE_MISSING", `No session state at ${statePath}`, {
-        remediation: "Initialise the project with the apex init tool first."
-      });
-    }
-    throw error2;
-  }
-  let data;
-  try {
-    data = JSON.parse(content.toString("utf8"));
-    validateState(data);
-  } catch (error2) {
-    throw new ApexError(
-      "STATE_INVALID",
-      `State recovery required for ${statePath}; primary and backup were not changed`,
-      { cause: error2, remediation: "Recover from the backup with recoverState, giving a reason." }
-    );
-  }
-  return { data, path: path3.resolve(statePath), revision: sha2562(content), inputRevisions: /* @__PURE__ */ new Map() };
-}
-function checkStateRevision(doc, statePath) {
-  if (doc.path !== path3.resolve(statePath) || fileRevision(statePath) !== doc.revision) {
-    throw stateConflict("State conflict: primary revision changed; reload before retrying", {
-      remediation: "Read the state again (status) and repeat the change if it is still needed."
-    });
-  }
-  for (const [inputPath, revision] of doc.inputRevisions) {
-    if (fileRevision(inputPath) !== revision) {
-      throw stateConflict(`Input conflict: validated bytes changed at ${inputPath}`);
-    }
-  }
-}
-function serializeState(data) {
-  const ordered = (value) => {
-    if (!isPlainObject4(value)) return value;
-    const keys = Object.keys(value);
-    const stepKeyed = keys.length > 0 && keys.every((key) => VALID_STEP_KEYS.has(key));
-    const sorted = stepKeyed ? STEP_ORDER.filter((key) => key in value) : keys;
-    return { keys: sorted, value };
-  };
-  const render = (value, indent) => {
-    if (Array.isArray(value)) {
-      if (value.length === 0) return "[]";
-      const inner = value.map((item) => `${indent}  ${render(item, `${indent}  `)}`);
-      return `[
-${inner.join(",\n")}
-${indent}]`;
-    }
-    if (isPlainObject4(value)) {
-      const { keys } = ordered(value);
-      if (keys.length === 0) return "{}";
-      const inner = keys.map((key) => `${indent}  ${JSON.stringify(key)}: ${render(value[key], `${indent}  `)}`);
-      return `{
-${inner.join(",\n")}
-${indent}}`;
-    }
-    return JSON.stringify(value) ?? "null";
-  };
-  return `${render(data, "")}
-`;
-}
-function sleepSync(ms) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-function renameWithRetry(from, to, { attempts = 10, baseDelayMs = 20 } = {}) {
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      fs3.renameSync(from, to);
-      return;
-    } catch (error2) {
-      if (!RETRYABLE_RENAME.has(error2.code) || attempt >= attempts) throw error2;
-      sleepSync(Math.min(baseDelayMs * 2 ** (attempt - 1), 1e3));
-    }
-  }
-}
-function atomicWrite(statePath, data, { backup = true } = {}) {
-  fs3.mkdirSync(path3.dirname(statePath), { recursive: true });
-  const tmp = path3.join(path3.dirname(statePath), `.apex-${randomBytes2(6).toString("hex")}.tmp`);
-  const fd = fs3.openSync(tmp, "wx");
-  try {
-    fs3.writeSync(fd, serializeState(data));
-    fs3.fsyncSync(fd);
-  } finally {
-    fs3.closeSync(fd);
-  }
-  try {
-    if (backup && fs3.existsSync(statePath)) fs3.copyFileSync(statePath, statePath.replace(/\.json$/, ".json.bak"));
-    renameWithRetry(tmp, statePath);
-  } finally {
-    fs3.rmSync(tmp, { force: true });
-  }
-}
-function withProjectLock(statePath, fn) {
-  fs3.mkdirSync(path3.dirname(statePath), { recursive: true });
-  const lockPath = `${statePath}.node.lock`;
-  let fd;
-  for (let attempt = 0; attempt < 2 && fd === void 0; attempt += 1) {
-    try {
-      fd = fs3.openSync(lockPath, "wx");
-      fs3.writeSync(fd, JSON.stringify({ pid: process.pid, at: isoNow() }));
-    } catch (error2) {
-      if (error2.code !== "EEXIST") throw error2;
-      const age = Date.now() - fs3.statSync(lockPath).mtimeMs;
-      if (age > STALE_LOCK_MS && attempt === 0) {
-        fs3.rmSync(lockPath, { force: true });
-        continue;
-      }
-      throw stateConflict("State conflict: another writer holds the project lock", {
-        remediation: "Retry shortly; only one change per project can run at a time."
-      });
-    }
-  }
-  try {
-    return fn();
-  } finally {
-    fs3.closeSync(fd);
-    fs3.rmSync(lockPath, { force: true });
-  }
-}
-function appendChangeLog(statePath, entry) {
-  try {
-    fs3.appendFileSync(path3.join(path3.dirname(statePath), CHANGE_LOG_FILE), `${JSON.stringify(entry)}
-`);
-    return true;
-  } catch {
-    return false;
-  }
-}
-function writeState(statePath, data, { doc = null, audit: audit2 = null } = {}) {
-  return withProjectLock(statePath, () => {
-    const before = fs3.existsSync(statePath) ? fileRevision(statePath) : null;
-    if (doc) checkStateRevision(doc, statePath);
-    else if (before !== null) {
-      throw stateConflict("State conflict: existing state requires a revision-aware read before writing");
-    }
-    data.updated = isoNow();
-    validateState(data);
-    atomicWrite(statePath, data);
-    const after = fileRevision(statePath);
-    if (doc) doc.revision = after;
-    if (audit2) {
-      appendChangeLog(statePath, {
-        at: data.updated,
-        tool: audit2.tool,
-        args_sha256: sha2562(Buffer.from(JSON.stringify(audit2.args ?? {}), "utf8")),
-        revision_before: before,
-        revision_after: after,
-        outcome: audit2.outcome ?? "applied"
-      });
-    }
-    return after;
-  });
-}
-function recoverState(statePath, project, reason) {
-  if (typeof reason !== "string" || !reason.trim()) throw invalidInput("Recovery requires a non-empty audit reason");
-  return withProjectLock(statePath, () => {
-    let healthy;
-    try {
-      readState(statePath);
-      healthy = true;
-    } catch {
-      healthy = false;
-    }
-    if (healthy) throw invalidInput("Healthy primary state cannot be replaced by backup recovery");
-    const backup = statePath.replace(/\.json$/, ".json.bak");
-    const { data } = readState(backup);
-    if (!("steps" in data) || !isPlainObject4(data.decisions ?? {})) {
-      throw invalidInput("Backup recovery requires explicit valid steps and decisions structures");
-    }
-    if (data.project !== project) throw invalidInput("Backup belongs to another project");
-    let damaged = null;
-    if (fs3.existsSync(statePath)) {
-      damaged = path3.join(path3.dirname(statePath), `.damaged-state-${randomBytes2(6).toString("hex")}`);
-      fs3.copyFileSync(statePath, damaged);
-    }
-    const now = isoNow();
-    (data.decision_log ??= []).push({
-      decision: "Explicit backup recovery",
-      rationale: reason.trim(),
-      timestamp: now,
-      backup_sha256: fileRevision(backup)
-    });
-    data.updated = now;
-    atomicWrite(statePath, data, { backup: false });
-    const revision = fileRevision(statePath);
-    appendChangeLog(statePath, {
-      at: now,
-      tool: "recoverState",
-      args_sha256: sha2562(Buffer.from(reason.trim(), "utf8")),
-      revision_before: null,
-      revision_after: revision,
-      outcome: "recovered"
-    });
-    return { outcome: "recovered", revision, preserved_damaged_path: damaged };
-  });
-}
-
-// plugin/mcp/apex/src/core/gates.mjs
-var CHALLENGER_GATE = {
-  1: ["01-requirements.md", "challenge-findings-requirements.json"],
-  2: ["02-architecture-assessment.md", "challenge-findings-architecture.json"],
-  4: ["04-implementation-plan.md", "challenge-findings-plan.json"]
-};
-var REVIEW_GUIDANCE = [
-  ".github/agents/_subagents/challenger-review-subagent.agent.md",
-  ".github/skills/apex-azure-defaults/references/adversarial-checklists.md",
-  ".github/skills/apex-azure-defaults/references/adversarial-review-protocol.md",
-  "tools/scripts/validate-challenger-findings.mjs"
-];
-var EXPECTED_TYPE = {
-  1: "requirements",
-  2: "architecture",
-  4: "implementation-plan"
-};
-var isFile = (target) => {
-  try {
-    return fs4.statSync(target).isFile();
-  } catch {
-    return false;
-  }
-};
-function reviewPaths(ctx, project, step, selected, data) {
-  const gate = CHALLENGER_GATE[step];
-  if (!gate) return [];
-  const gates = [[...gate]];
-  if ((step === "2" || step === "4") && data?.decisions?.review_depth === "deep") {
-    gates[0] = [gate[0], gate[1].replace(/\.json$/, "-pass1.json")];
-  }
-  if (step === "2") gates.push(["03-des-cost-estimate.md", "challenge-findings-cost-estimate.json"]);
-  const dir = projectDir(ctx, project);
-  if (step === "4" && selected) return [[path4.join(dir, gate[0]), selected]];
-  const produced = gates.some(([gating]) => isFile(path4.join(dir, gating)));
-  return gates.filter(([gating]) => isFile(path4.join(dir, gating)) || step === "2" && produced).map(([gating, sidecar]) => [path4.join(dir, gating), path4.join(dir, sidecar)]);
-}
-function findingsMissing(ctx, project, step, selected, data) {
-  let gating = null;
-  let sidecar = null;
-  for ([gating, sidecar] of reviewPaths(ctx, project, step, selected, data)) {
-    if (!isFile(sidecar)) return { blocked: true, gating, sidecar };
-    try {
-      const text = fs4.readFileSync(sidecar, "utf8").trim();
-      if (!text) return { blocked: true, gating, sidecar };
-      JSON.parse(text);
-    } catch {
-      return { blocked: true, gating, sidecar };
-    }
-  }
-  return { blocked: false, gating, sidecar };
-}
-function findingsInvalid(ctx, project, step, selected, data) {
-  const root = path4.resolve(ctx.workspace);
-  for (const [artifact, sidecar] of reviewPaths(ctx, project, step, selected, data)) {
-    if (!isFile(sidecar)) continue;
-    try {
-      const document = JSON.parse(fs4.readFileSync(sidecar, "utf8"));
-      if (document === null || typeof document !== "object" || !Array.isArray(document.findings) || "batch_results" in document) {
-        return `${sidecar}: invalid single-review findings payload`;
-      }
-      if (!isFile(artifact)) return `${artifact}: required reviewed artifact is missing`;
-      const challenged = document.challenged_artifact;
-      if (typeof challenged !== "string" || path4.resolve(root, challenged) !== path4.resolve(artifact)) {
-        return `${sidecar}: challenged_artifact does not match the gating artifact`;
-      }
-      let expectedType = EXPECTED_TYPE[step];
-      let expectedFocus = "comprehensive";
-      if (path4.basename(artifact) === "03-des-cost-estimate.md") {
-        expectedType = "cost-estimate";
-        expectedFocus = "cost-feasibility";
-      } else if (sidecar.endsWith("-pass1.json") && (step === "2" || step === "4")) {
-        expectedFocus = "security-governance";
-      }
-      if (document.artifact_type !== expectedType || document.review_focus !== expectedFocus) {
-        return `${sidecar}: review type/focus does not match the required gate`;
-      }
-      const stem = path4.basename(sidecar, ".json");
-      const expectedPass = selected ? Number.parseInt(stem.slice(stem.lastIndexOf("-pass") + 5), 10) : 1;
-      if (!Number.isInteger(document.pass_number) || document.pass_number !== expectedPass) {
-        return `${sidecar}: required pass-${expectedPass} review is invalid`;
-      }
-      if (["BLOCKED", "FAILED"].includes(document.overall_assessment)) {
-        return `${sidecar}: reviewer reported blocked/failed`;
-      }
-      if (document.must_fix_count !== 0 || document.findings.some((finding3) => !finding3 || typeof finding3 !== "object" || finding3.severity === "must_fix")) {
-        return `${sidecar}: unresolved must_fix findings; decisions are not closure evidence`;
-      }
-      const errors = verifyReviewFile(path4.resolve(sidecar), { root, guidanceRoot: path4.resolve(ctx.apexRoot) });
-      if (errors.length) return `${sidecar}: strict review validation failed: ${errors.join("\n").slice(-3e3)}`;
-    } catch (error2) {
-      return `${sidecar}: review verification unavailable or invalid (${error2.message})`;
-    }
-  }
-  return null;
-}
-function recordSkip(data, step, reason, now) {
-  data.decisions ??= {};
-  (data.decisions.challenger_skip ??= []).push({ step, reason, recorded: now });
-}
-function selectReplacementReview(ctx, project, step, options, data) {
-  const chosen = options.planReview;
-  const reason = String(options.planReviewReason ?? "").trim();
-  if (chosen == null && !reason) {
-    const stored = data?.review_selections?.[step];
-    if (stored == null) return { selected: null, selection: null };
-    if (typeof stored !== "object" || stored.schema_version !== "review-selection-v1") {
-      throw invalidInput("Unsupported review selection; explicit owner migration required");
-    }
-    const replay = selectReplacementReview(
-      ctx,
-      project,
-      step,
-      {
-        planReview: stored.path,
-        planReviewReason: "Reuse explicitly stored review selection",
-        allowMissingChallenger: options.allowMissingChallenger ?? false
-      },
-      data
-    );
-    if (fileRevision(replay.selected) !== stored.sha256) {
-      throw invalidInput("Selected review bytes changed; explicit owner resolution required");
-    }
-    if (["pass_number", "review_focus", "path"].some((field) => stored[field] !== replay.selection.stored[field])) {
-      throw invalidInput("Stored selection metadata does not match selected evidence");
-    }
-    replay.selection.stored = stored;
-    return replay;
-  }
-  if (step !== "4" || !chosen || !reason) {
-    throw invalidInput("Plan replacement selection requires Step 4, a review path and its audit reason");
-  }
-  if (data?.decisions?.review_depth === "deep") {
-    throw invalidInput(
-      "--plan-review selects a default comprehensive confirmation, not a deep-review lens replacement"
-    );
-  }
-  if (options.allowMissingChallenger) throw invalidInput("A selected review cannot use the missing-review bypass");
-  const dir = path4.resolve(projectDir(ctx, project));
-  const candidate = path4.isAbsolute(chosen) ? chosen : path4.join(ctx.workspace, chosen);
-  let stat;
-  try {
-    stat = fs4.lstatSync(candidate);
-  } catch {
-    stat = null;
-  }
-  const sameDir = (a, b) => {
-    try {
-      return fs4.realpathSync.native(a) === fs4.realpathSync.native(b);
-    } catch {
-      return false;
-    }
-  };
-  if (!stat || stat.isSymbolicLink() || !stat.isFile() || !sameDir(path4.dirname(path4.resolve(candidate)), dir)) {
-    throw invalidInput("Selected review must be a regular, non-symlink file in the current project");
-  }
-  const match = /^challenge-findings-plan-pass([2-9][0-9]*|1[0-9]+)\.json$/.exec(path4.basename(candidate));
-  if (!match) throw invalidInput("Select an explicitly authorized later Plan pass using its canonical filename");
-  if (!isFile(path4.join(dir, CHALLENGER_GATE["4"][1]))) {
-    throw invalidInput("Preserve the original Plan review before selecting a replacement");
-  }
-  const resolved = path4.join(dir, path4.basename(candidate));
-  const digest2 = createHash5("sha256").update(fs4.readFileSync(resolved)).digest("hex");
-  return {
-    selected: resolved,
-    selection: {
-      decision: "Select Plan replacement review for completion",
-      rationale: `${reason}; review=${path4.basename(resolved)}; pass=${match[1]}; sha256=${digest2}`,
-      step: "4",
-      stored: {
-        schema_version: "review-selection-v1",
-        path: path4.relative(path4.resolve(ctx.workspace), resolved).split(path4.sep).join("/"),
-        sha256: digest2,
-        pass_number: Number.parseInt(match[1], 10),
-        review_focus: "comprehensive",
-        input_coverage: "primary-and-review-guidance"
-      }
-    }
-  };
-}
-function watchReviewInputs(ctx, doc, project, step, selected) {
-  const dir = projectDir(ctx, project);
-  const pairs = reviewPaths(ctx, project, step, selected, doc.data);
-  const paths = pairs.flat();
-  for (const [, sidecar] of pairs) {
-    if (!isFile(sidecar)) continue;
-    try {
-      const document = JSON.parse(fs4.readFileSync(sidecar, "utf8"));
-      for (const supporting of document.supporting_inputs ?? []) paths.push(path4.join(ctx.workspace, supporting.path));
-      if (document.schema_version === "1.1") {
-        for (const relative of [document.transcript?.path, document.review_request?.path]) {
-          if (typeof relative !== "string") continue;
-          paths.push(path4.join(ctx.workspace, relative));
-          if (relative.endsWith(".md")) paths.push(path4.join(ctx.workspace, relative.replace(/\.md$/, ".json")));
-        }
-      }
-    } catch {
-    }
-  }
-  if (CHALLENGER_GATE[step]) paths.push(...CHALLENGER_GATE[step].map((name) => path4.join(dir, name)));
-  if (step === "2") {
-    paths.push(path4.join(dir, "03-des-cost-estimate.md"), path4.join(dir, "challenge-findings-cost-estimate.json"));
-  }
-  paths.push(...REVIEW_GUIDANCE.map((name) => path4.join(ctx.apexRoot, name)));
-  for (const target of paths) doc.inputRevisions.set(path4.resolve(target), fileRevision(target));
-}
-function recordSelection(data, step, selection, now) {
-  if (!selection) return;
-  const stored = { ...selection.stored };
-  stored.selected_at ??= now;
-  (data.review_selections ??= {})[step] = stored;
-  const { stored: _ignored, ...entry } = selection;
-  (data.decision_log ??= []).push({ ...entry, timestamp: now });
-}
-
-// plugin/mcp/apex/src/core/commands.mjs
-var ARTIFACT_PATTERNS = [
-  [/00-session-state\.json$/, "session-state"],
-  [/00-handoff\.md$/, "handoff"],
-  [/01-requirements\.md$/, "requirements"],
-  [/02-architecture.*\.md$/, "architecture"],
-  [/03-des-.*\.md$/, "design"],
-  [/04-governance-constraints\.json$/, "governance-json"],
-  [/04-governance-constraints\.md$/, "governance"],
-  [/04-implementation-plan\.md$/, "implementation-plan"],
-  [/04-dependency-diagram/, "diagram"],
-  [/04-runtime-diagram/, "diagram"],
-  [/06-deployment-summary\.md$/, "deployment-summary"],
-  [/07-.*\.md$/, "as-built"],
-  [/09-lessons-learned\.json$/, "lessons-json"],
-  [/09-lessons-learned\.md$/, "lessons"]
-];
-function classifyArtifact(filename) {
-  for (const [pattern, type] of ARTIFACT_PATTERNS) if (pattern.test(filename)) return type;
-  if (filename.endsWith(".json")) return "json";
-  if (filename.endsWith(".md")) return "markdown";
-  return "other";
-}
-function extractStep(filename) {
-  return /^(\d{2})-/.exec(filename)?.[1] ?? "";
-}
-function audit(tool, args) {
-  return { tool, args };
-}
-function load2(ctx, project) {
-  const statePath = sessionStatePath(ctx, project);
-  return { statePath, doc: readState(statePath) };
-}
-function init(ctx, { project, force = false }) {
-  validateProjectName(project);
-  const statePath = sessionStatePath(ctx, project);
-  const exists = fs5.existsSync(statePath);
-  if (exists && !force) {
-    throw invalidInput(`Session state already exists: ${statePath}. Use --force to overwrite.`, {
-      remediation: "Use the status tool to read the existing project, or pass force only to start over."
-    });
-  }
-  const data = makeTemplate(project);
-  const doc = exists ? { data, path: path5.resolve(statePath), revision: fileRevision(statePath), inputRevisions: /* @__PURE__ */ new Map() } : null;
-  writeState(statePath, data, { doc, audit: audit("init", { project, force }) });
-  return { created: true, project, file: statePath };
-}
-var BASELINE_REMEDIATION = "Run live governance discovery first and record governance_baseline=live before starting Step 4.";
-function enforceGovernanceBaselineGate(data, project, step) {
-  if (step !== "4") return;
-  const baseline = String(data?.decisions?.governance_baseline ?? "").trim();
-  if (baseline === "live") return;
-  const error2 = baseline === "reference" ? "governance_baseline_reference" : "governance_baseline_unset";
-  throw gateBlocked("Step 4 requires a live governance baseline", {
-    remediation: BASELINE_REMEDIATION,
-    details: { project, step, error: error2, governance_baseline: baseline || null }
-  });
-}
-function startStep(ctx, { project, step, force = false }) {
-  const key = validateStepKey(step);
-  const { statePath, doc } = load2(ctx, project);
-  const data = migrateToV3(doc.data);
-  enforceGovernanceBaselineGate(data, project, key);
-  const stepData = data.steps[key] ?? {};
-  if (stepData.status === "complete" && !force) {
-    throw invalidInput(`Step ${key} is already complete. Use --force to re-start.`);
-  }
-  const now = isoNow();
-  Object.assign(stepData, { status: "in_progress", started: now, completed: null });
-  data.steps[key] = stepData;
-  data.current_step = stepToInt(key);
-  writeState(statePath, data, { doc, audit: audit("startStep", { project, step: key, force }) });
-  return { project, step: key, status: "in_progress", started: now };
-}
-var TELEMETRY_FIELDS = [
-  ["stepStart", "step_start_iso"],
-  ["stepEnd", "step_end_iso"],
-  ["elapsedMs", "elapsed_ms"],
-  ["inputTokens", "input_tokens"],
-  ["outputTokens", "output_tokens"],
-  ["subagentCount", "subagent_count"],
-  ["validationAttempts", "validation_attempts"],
-  ["cacheHits", "cache_hits"]
-];
-function checkpoint(ctx, { project, step, subStep, artifact = null, telemetry = {} }) {
-  const key = validateStepKey(step);
-  const { statePath, doc } = load2(ctx, project);
-  const data = migrateToV3(doc.data);
-  const stepData = data.steps[key] ?? {};
-  stepData.sub_step = subStep;
-  if (artifact && !(stepData.artifacts ?? []).includes(artifact)) (stepData.artifacts ??= []).push(artifact);
-  const supplied = Object.fromEntries(
-    TELEMETRY_FIELDS.filter(([input]) => telemetry[input] != null).map(([input, field]) => [field, telemetry[input]])
-  );
-  if (Object.keys(supplied).length) stepData.telemetry = { ...stepData.telemetry ?? {}, ...supplied };
-  data.steps[key] = stepData;
-  writeState(statePath, data, {
-    doc,
-    audit: audit("checkpoint", { project, step: key, subStep, artifact, telemetry })
-  });
-  const result = { project, step: key, sub_step: subStep, updated: data.updated ?? "" };
-  if (artifact) result.artifact_added = artifact;
-  if (Object.keys(supplied).length) result.telemetry_updated = Object.keys(supplied);
-  return result;
-}
-function decide(ctx, { project, key = null, value = null, decision = null, rationale = null, step = null }) {
-  const hasKv = key != null;
-  const hasDecision = decision != null;
-  if (hasKv && hasDecision) {
-    throw invalidInput("Cannot use both --key/--value (Mode A) and --decision (Mode B) at the same time.");
-  }
-  if (!hasKv && !hasDecision)
-    throw invalidInput("Provide either --key/--value for decisions or --decision for decision_log.");
-  if (hasKv && value == null) throw invalidInput("--key requires --value.");
-  const { statePath, doc } = load2(ctx, project);
-  const data = migrateToV3(doc.data);
-  if (hasKv) {
-    (data.decisions ??= {})[key] = value;
-    writeState(statePath, data, { doc, audit: audit("decide", { project, key, value }) });
-    return { project, key, value };
-  }
-  const log = data.decision_log ??= [];
-  const existing = log.find(
-    (item) => item.decision === decision && (item.rationale ?? null) === (rationale || null) && (item.step ?? null) === (step || null)
-  );
-  if (existing) {
-    return { project, decision, timestamp: existing.timestamp, outcome: "already_applied", ...step ? { step } : {} };
-  }
-  const entry = { decision, timestamp: isoNow() };
-  if (rationale) entry.rationale = rationale;
-  if (step) entry.step = step;
-  log.push(entry);
-  writeState(statePath, data, { doc, audit: audit("decide", { project, decision, rationale, step }) });
-  return { project, decision, timestamp: entry.timestamp, ...step ? { step } : {} };
-}
-function finding(ctx, { project, add = null, addMany = null, remove = null }) {
-  if (!add && !remove && !addMany) throw invalidInput("Provide --add, --add-many, or --remove.");
-  if (addMany) {
-    if (!Array.isArray(addMany)) throw invalidInput("apex-recall: --add-many expected a JSON array");
-    const items = addMany.map((item) => {
-      if (typeof item === "string") return item;
-      if (item && typeof item === "object") {
-        if (typeof item.text !== "string")
-          throw invalidInput("apex-recall: --add-many object entries require a string `text` key");
-        return item.text;
-      }
-      throw invalidInput("apex-recall: --add-many entries must be strings or objects with a `text` key");
-    });
-    if (!items.length) return { project, action: "appended", appended: 0 };
-    const { statePath: statePath2, doc: doc2 } = load2(ctx, project);
-    const data2 = migrateToV3(doc2.data);
-    const findings2 = data2.open_findings ??= [];
-    const fresh = [...new Set(items)].filter((item) => !findings2.includes(item));
-    if (fresh.length) {
-      findings2.push(...fresh);
-      writeState(statePath2, data2, { doc: doc2, audit: audit("finding", { project, addMany }) });
-    }
-    return {
-      project,
-      action: "appended",
-      appended: fresh.length,
-      skipped_existing: items.length - fresh.length,
-      total: findings2.length
-    };
-  }
-  const { statePath, doc } = load2(ctx, project);
-  const data = migrateToV3(doc.data);
-  const findings = data.open_findings ??= [];
-  if (add) {
-    if (!findings.includes(add)) findings.push(add);
-    writeState(statePath, data, { doc, audit: audit("finding", { project, add }) });
-    return { project, action: "added", finding: add, total: findings.length };
-  }
-  const index = findings.indexOf(remove);
-  if (index === -1) return { project, action: "not_found", finding: remove, total: findings.length };
-  findings.splice(index, 1);
-  writeState(statePath, data, { doc, audit: audit("finding", { project, remove }) });
-  return { project, action: "removed", finding: remove, total: findings.length };
-}
-function reviewAudit(ctx, {
-  project,
-  step,
-  complexity = null,
-  passesPlanned = null,
-  passesExecuted = null,
-  models = [],
-  skips = [],
-  skipReasons = [],
-  attemptId = null,
-  attemptKind = null,
-  inputDigest = null,
-  attemptOutcome = null,
-  retryOf = null
-}) {
-  const key = validateStepKey(step);
-  const { statePath, doc } = load2(ctx, project);
-  const data = migrateToV3(doc.data);
-  const args = { project, step: key, complexity, passesPlanned, passesExecuted, models, skips, skipReasons };
-  if (attemptId != null || [attemptKind, inputDigest, attemptOutcome, retryOf].some(Boolean)) {
-    if (!attemptId || !/^[A-Za-z0-9_-]{1,100}$/.test(attemptId) || !["invocation", "repair", "empty-output-retry"].includes(attemptKind) || !/^[a-f0-9]{64}$/.test(inputDigest ?? "") || !["started", "completed", "failed", "unknown"].includes(attemptOutcome)) {
-      throw invalidInput("Attempt ID, kind, input digest and outcome are required");
-    }
-    const attempts = data.review_attempts ??= [];
-    const previous = attempts.filter((attempt) => attempt.id === attemptId);
-    const identity = { step: key, kind: attemptKind, input_digest: inputDigest, retry_of: retryOf };
-    if (previous.some((attempt) => Object.entries(identity).some(([field, value]) => attempt[field] !== value))) {
-      throw invalidInput("Attempt identity cannot be reused for different inputs, kind or step");
-    }
-    const last = previous.at(-1);
-    if (last && last.outcome === attemptOutcome) {
-      checkStateRevision(doc, statePath);
-      return { outcome: "already_applied", attempt_id: attemptId };
-    }
-    if (last && last.outcome !== "started") {
-      throw invalidInput(
-        "Terminal or unknown attempt outcomes cannot be rewritten; reconcile explicitly with the owner"
-      );
-    }
-    if (!last && attemptOutcome !== "started") throw invalidInput("Record attempt start before its outcome");
-    if (attemptKind === "empty-output-retry") {
-      const original = attempts.filter((attempt) => attempt.id === retryOf).at(-1);
-      if (original && (original.kind !== "invocation" || original.step !== key)) {
-        throw invalidInput("Retry must reference an original invocation in the same step; retry chains are forbidden");
-      }
-      if (!original || original.input_digest !== inputDigest || original.outcome !== "failed") {
-        throw invalidInput("Retry requires failed original attempt with identical input digest");
-      }
-      if (!last && attempts.some((attempt) => attempt.retry_of === retryOf)) {
-        throw invalidInput("Identical-input retry already recorded; allowance cannot reset");
-      }
-    } else if (retryOf != null) {
-      throw invalidInput("retry-of is only valid for empty-output-retry attempts");
-    }
-    attempts.push({
-      schema_version: "review-attempt-v1",
-      id: attemptId,
-      step: key,
-      kind: attemptKind,
-      input_digest: inputDigest,
-      outcome: attemptOutcome,
-      retry_of: retryOf,
-      recorded_at: isoNow()
-    });
-    writeState(statePath, data, {
-      doc,
-      audit: audit("reviewAudit", { ...args, attemptId, attemptKind, inputDigest, attemptOutcome, retryOf })
-    });
-    return { attempt_id: attemptId, outcome: attemptOutcome, authorization: "not_granted" };
-  }
-  const auditKey = `step_${key}`;
-  const reviewAuditMap = data.review_audit ??= {};
-  const entry = reviewAuditMap[auditKey] ??= {
-    complexity: "",
-    passes_planned: 0,
-    passes_executed: 0,
-    skipped: [],
-    skip_reasons: [],
-    models_used: []
-  };
-  if (complexity != null) entry.complexity = complexity;
-  if (passesPlanned != null) entry.passes_planned = passesPlanned;
-  if (passesExecuted != null) {
-    if (passesExecuted < (entry.passes_executed ?? 0))
-      throw invalidInput("Recorded executed review count cannot decrease");
-    entry.passes_executed = passesExecuted;
-  }
-  for (const model of models) if (!(entry.models_used ??= []).includes(model)) entry.models_used.push(model);
-  for (const skip of skips) {
-    const number4 = Number.parseInt(skip, 10);
-    if (!(entry.skipped ??= []).includes(number4)) entry.skipped.push(number4);
-  }
-  for (const reason of skipReasons) if (!(entry.skip_reasons ??= []).includes(reason)) entry.skip_reasons.push(reason);
-  writeState(statePath, data, { doc, audit: audit("reviewAudit", args) });
-  return { project, step: key, audit_key: auditKey, entry };
-}
-var REVIEW_REMEDIATION = "Return to the artifact owner and 10-Challenger for current review and blocker closure. Preserve retry limits; do not restamp hashes.";
-function invalidReview(project, step, reason) {
-  return gateBlocked(reason, {
-    remediation: REVIEW_REMEDIATION,
-    details: { project, step, error: "challenger_findings_invalid", reason }
-  });
-}
-function sameSelection(prior, selected) {
-  return !selected || prior && Object.entries(selected).every(([field, value]) => field === "selected_at" || prior[field] === value);
-}
-var COST_ESTIMATE_FILE = "02-cost-estimate.json";
-var COST_GATE_REMEDIATION = "Regenerate or repair agent-output/<project>/02-cost-estimate.json with cost-estimate-subagent, then complete Step 2 again.";
-function readCostEstimate(ctx, project) {
-  const file = path5.join(projectDir(ctx, project), COST_ESTIMATE_FILE);
-  let stat;
-  try {
-    stat = fs5.lstatSync(file);
-  } catch (error2) {
-    if (error2.code !== "ENOENT") throw error2;
-    return {
-      file,
-      problems: [{ path: COST_ESTIMATE_FILE, message: "02-cost-estimate.json is required for Step 2 completion" }]
-    };
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    return {
-      file,
-      problems: [{ path: COST_ESTIMATE_FILE, message: "02-cost-estimate.json must be a regular file" }]
-    };
-  }
-  try {
-    return { file, problems: checkCostEstimate(JSON.parse(fs5.readFileSync(file, "utf8"))) };
-  } catch (error2) {
-    return {
-      file,
-      problems: [{ path: COST_ESTIMATE_FILE, message: `02-cost-estimate.json is not valid JSON: ${error2.message}` }]
-    };
-  }
-}
-function enforceCostEstimateGate(ctx, project, step) {
-  if (step !== "2") return;
-  const { file, problems } = readCostEstimate(ctx, project);
-  if (problems.length === 0) return;
-  throw gateBlocked("Step 2 cost estimate is missing or invalid", {
-    remediation: COST_GATE_REMEDIATION,
-    details: { project, step, error: "cost_estimate_invalid", file, problems }
-  });
-}
-var POLICY_MAP_REMEDIATION = "Regenerate or repair agent-output/<project>/02-policy-map.json from the current 04-governance-constraints.json, then complete Step 2 again.";
-function readPolicyGateInput(ctx, project, filename) {
-  const file = path5.join(projectDir(ctx, project), filename);
-  let stat;
-  try {
-    stat = fs5.lstatSync(file);
-  } catch (error2) {
-    if (error2.code !== "ENOENT") throw error2;
-    return { file, missing: true, problems: [{ path: filename, message: `${filename} is required` }] };
-  }
-  if (stat.isSymbolicLink() || !stat.isFile()) {
-    return {
-      file,
-      problems: [{ path: filename, message: `${filename} must be a regular file` }]
-    };
-  }
-  const bytes = fs5.readFileSync(file);
-  try {
-    return { file, bytes, document: JSON.parse(bytes.toString("utf8")) };
-  } catch (error2) {
-    return {
-      file,
-      problems: [{ path: filename, message: `${filename} is not valid JSON: ${error2.message}` }]
-    };
-  }
-}
-function enforcePolicyMapGate(ctx, project, step) {
-  if (step !== "2") return;
-  const constraints = readPolicyGateInput(ctx, project, GOVERNANCE_CONSTRAINTS_FILE);
-  if (constraints.missing) {
-    throw gateBlocked("Step 2 requires governance constraints", {
-      remediation: "Run Step 1.5 Governance discovery before completing Step 2.",
-      details: {
-        project,
-        step,
-        error: "governance_constraints_missing",
-        file: constraints.file,
-        problems: constraints.problems
-      }
-    });
-  }
-  if (constraints.problems?.length) {
-    throw gateBlocked("Step 2 governance constraints are invalid", {
-      remediation: "Regenerate agent-output/<project>/04-governance-constraints.json with Governance discovery.",
-      details: {
-        project,
-        step,
-        error: "governance_constraints_missing",
-        file: constraints.file,
-        problems: constraints.problems
-      }
-    });
-  }
-  const policyMap = readPolicyGateInput(ctx, project, POLICY_MAP_FILE);
-  if (policyMap.problems?.length || policyMap.missing) {
-    throw gateBlocked("Step 2 policy map is missing or invalid", {
-      remediation: POLICY_MAP_REMEDIATION,
-      details: {
-        project,
-        step,
-        error: "policy_map_invalid",
-        file: policyMap.file,
-        problems: policyMap.problems
-      }
-    });
-  }
-  const constraintsSha256 = sha256Hex(constraints.bytes);
-  const problems = checkPolicyMap({
-    policyMap: policyMap.document,
-    constraints: constraints.document,
-    constraintsSha256
-  });
-  if (problems.length > 0) {
-    throw gateBlocked("Step 2 policy map is invalid", {
-      remediation: POLICY_MAP_REMEDIATION,
-      details: {
-        project,
-        step,
-        error: "policy_map_invalid",
-        file: policyMap.file,
-        constraints_file: constraints.file,
-        problems
-      }
-    });
-  }
-}
-function runGate(ctx, doc, project, step, options, { complete, watch, missingRemediation }) {
-  let selected;
-  let selection;
-  try {
-    ({ selected, selection } = selectReplacementReview(ctx, project, step, options, doc.data));
-    if (watch(selected)) {
-      watchReviewInputs(ctx, doc, project, step, selected);
-      if (selection && doc.inputRevisions.get(selected) !== selection.stored.sha256) {
-        throw invalidInput("Selected review changed before validation");
-      }
-    }
-  } catch (error2) {
-    if (error2 instanceof ApexError && error2.code !== "INVALID_INPUT") throw error2;
-    throw invalidReview(project, step, error2.message);
-  }
-  let blocked = false;
-  if (complete) {
-    const missing = findingsMissing(ctx, project, step, selected, doc.data);
-    blocked = missing.blocked;
-    if (blocked && !options.allowMissingChallenger) {
-      throw gateBlocked(`Required challenger findings missing for step ${step}`, {
-        remediation: missingRemediation,
-        details: {
-          project,
-          step,
-          error: "challenger_findings_missing",
-          gating_artifact: missing.gating,
-          required_sidecar: missing.sidecar
-        }
-      });
-    }
-    if (blocked && !String(options.challengerSkipReason ?? "").trim()) {
-      throw gateBlocked("A missing-review bypass needs an auditable reason", {
-        remediation: 'Provide challengerSkipReason "<auditable reason>"',
-        details: { project, step, error: "challenger_skip_reason_required" }
-      });
-    }
-  }
-  if (complete || selected) {
-    const invalid = findingsInvalid(ctx, project, step, selected, doc.data);
-    if (invalid) throw invalidReview(project, step, invalid);
-  }
-  return { blocked, selected, selection };
-}
-function completeStep(ctx, options) {
-  const { project } = options;
-  const step = validateStepKey(options.step);
-  const { statePath, doc } = load2(ctx, project);
-  const { blocked, selection } = runGate(ctx, doc, project, step, options, {
-    complete: true,
-    watch: () => true,
-    missingRemediation: "Run the review against the gating artifact and produce the required findings sidecar, then complete the step again. To bypass intentionally, set allowMissingChallenger with challengerSkipReason."
-  });
-  checkStateRevision(doc, statePath);
-  const data = doc.data;
-  if (data.steps?.[step]?.status === "complete" && sameSelection(data.review_selections?.[step], selection?.stored)) {
-    return {
-      project,
-      step,
-      status: "complete",
-      outcome: "already_applied",
-      completed: data.steps[step].completed ?? null
-    };
-  }
-  enforceCostEstimateGate(ctx, project, step);
-  enforcePolicyMapGate(ctx, project, step, data);
-  migrateToV3(data);
-  const now = isoNow();
-  const stepData = data.steps[step] ?? {};
-  Object.assign(stepData, { status: "complete", completed: now, sub_step: null });
-  data.steps[step] = stepData;
-  const skip = blocked && options.allowMissingChallenger;
-  if (skip) recordSkip(data, step, String(options.challengerSkipReason).trim(), now);
-  recordSelection(data, step, selection, now);
-  writeState(statePath, data, { doc, audit: audit("completeStep", options) });
-  const next = STEP_ORDER[STEP_ORDER.indexOf(step) + 1] ?? "next";
-  return {
-    project,
-    step,
-    status: "complete",
-    completed: now,
-    ...skip ? { challenger_skip_recorded: true } : {},
-    hint: `Prefer transition (fromStep ${step}, toStep ${next}, complete) when also recording decisions or starting the next step.`
-  };
-}
-function transition(ctx, options) {
-  const { project } = options;
-  const fromStep = validateStepKey(options.fromStep);
-  const toStep = validateStepKey(options.toStep);
-  const complete = Boolean(options.complete);
-  const decisions = {};
-  for (const [rawKey, rawValue] of Object.entries(options.decisions ?? {})) {
-    const key = String(rawKey).trim();
-    if (!key) throw invalidInput("--decision key is empty");
-    decisions[key] = String(rawValue).trim();
-  }
-  const { statePath, doc } = load2(ctx, project);
-  if (toStep === "4") {
-    const effectiveData = {
-      ...doc.data,
-      decisions: { ...doc.data.decisions ?? {}, ...decisions }
-    };
-    enforceGovernanceBaselineGate(effectiveData, project, toStep);
-  }
-  const explicit = ["planReview", "planReviewReason"].some((field) => options[field] != null);
-  if (explicit && !complete)
-    throw invalidReview(project, fromStep, "Replacement review selection requires transition --complete");
-  const { blocked, selection } = runGate(ctx, doc, project, fromStep, options, {
-    complete,
-    watch: (selected) => complete || Boolean(selected),
-    missingRemediation: "Run the review against the gating artifact and produce the required findings sidecar, then transition again. To bypass intentionally, set allowMissingChallenger with challengerSkipReason."
-  });
-  checkStateRevision(doc, statePath);
-  const data = doc.data;
-  const steps = data.steps ?? {};
-  if (steps[toStep]?.started && (data.current_step ?? 0) >= stepToInt(toStep) && (!complete || steps[fromStep]?.status === "complete") && Object.entries(decisions).every(([key, value]) => data.decisions?.[key] === value) && sameSelection(data.review_selections?.[fromStep], selection?.stored)) {
-    return { project, from_step: fromStep, to_step: toStep, outcome: "already_applied" };
-  }
-  if (steps[toStep]?.started) {
-    throw invalidInput("Transition conflict: destination already started; replay cannot reset progress or decisions");
-  }
-  if (complete) {
-    enforceCostEstimateGate(ctx, project, fromStep);
-    enforcePolicyMapGate(ctx, project, fromStep, data);
-  }
-  migrateToV3(data);
-  const now = isoNow();
-  const fromData = data.steps[fromStep] ?? {};
-  let skipRecorded = false;
-  if (complete) {
-    if (blocked && options.allowMissingChallenger && fromData.status !== "complete") {
-      recordSkip(data, fromStep, String(options.challengerSkipReason).trim(), now);
-      skipRecorded = true;
-    }
-    fromData.status = "complete";
-    fromData.completed = fromData.completed || now;
-    fromData.sub_step = null;
-  }
-  data.steps[fromStep] = fromData;
-  if (Object.keys(decisions).length) {
-    if (data.decisions && typeof data.decisions === "object" && !Array.isArray(data.decisions))
-      Object.assign(data.decisions, decisions);
-    else data.decisions = { ...decisions };
-  }
-  const toData = data.steps[toStep] ?? {};
-  Object.assign(toData, { status: "in_progress", started: now, completed: null });
-  data.steps[toStep] = toData;
-  data.current_step = stepToInt(toStep);
-  if (complete) recordSelection(data, fromStep, selection, now);
-  writeState(statePath, data, { doc, audit: audit("transition", options) });
-  return {
-    project,
-    from_step: fromStep,
-    to_step: toStep,
-    completed: complete,
-    decisions_recorded: Object.keys(decisions),
-    challenger_skip_recorded: skipRecorded,
-    timestamp: now
-  };
-}
-function listArtifacts(ctx, project) {
-  const dir = projectDir(ctx, project);
-  if (!fs5.existsSync(dir)) return [];
-  const rows = [];
-  const visit = (directory) => {
-    for (const entry of fs5.readdirSync(directory, { withFileTypes: true })) {
-      const full = path5.join(directory, entry.name);
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory()) visit(full);
-      else if (entry.isFile() && !entry.name.startsWith(".") && ![".bak", ".lock", ".tmp"].includes(path5.extname(entry.name))) {
-        rows.push({
-          file: path5.relative(ctx.workspace, full).split(path5.sep).join("/"),
-          type: classifyArtifact(entry.name),
-          step: extractStep(entry.name),
-          modified: fs5.statSync(full).mtimeMs / 1e3
-        });
-      }
-    }
-  };
-  visit(dir);
-  const parts = (row) => row.file.split("/");
-  return rows.sort((a, b) => {
-    const [x, y] = [parts(a), parts(b)];
-    for (let i = 0; i < Math.min(x.length, y.length); i += 1) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
-    return x.length - y.length;
-  });
-}
-function show(ctx, { project }) {
-  validateProjectName(project);
-  const statePath = sessionStatePath(ctx, project);
-  let session = {};
-  if (fs5.existsSync(statePath)) {
-    const doc = readState(statePath);
-    const data = doc.data;
-    session = {
-      current_step: data.current_step ?? 0,
-      iac_tool: data.iac_tool ?? "",
-      region: data.region ?? "",
-      updated: data.updated ?? "",
-      decisions: data.decisions ?? {},
-      open_findings: data.open_findings ?? [],
-      decision_log: data.decision_log ?? [],
-      steps: data.steps ?? {},
-      review_selections: data.review_selections ?? {},
-      metadata: data.metadata ?? {},
-      review_attempts: data.review_attempts ?? []
-    };
-    const effective = {};
-    for (const step of Object.keys(data.review_selections ?? {})) {
-      try {
-        const { selected, selection } = selectReplacementReview(ctx, project, step, {}, data);
-        watchReviewInputs(ctx, doc, project, step, selected);
-        if (doc.inputRevisions.get(selected) !== selection.stored.sha256) {
-          throw invalidInput("Selected review changed during validation");
-        }
-        const missing = findingsMissing(ctx, project, step, selected, data).blocked;
-        const error2 = missing ? "Selected review missing" : findingsInvalid(ctx, project, step, selected, data);
-        checkStateRevision(doc, statePath);
-        effective[step] = {
-          status: error2 ? "invalid" : "current",
-          error: error2,
-          input_coverage: "primary-and-review-guidance"
-        };
-      } catch (error2) {
-        effective[step] = { status: "invalid", error: error2.message };
-      }
-    }
-    session.effective_reviews = effective;
-    checkStateRevision(doc, statePath);
-  }
-  const artifacts = listArtifacts(ctx, project);
-  return {
-    project,
-    session,
-    artifacts,
-    artifact_count: artifacts.length,
-    state_status: Object.keys(session).length ? "present" : "missing"
-  };
-}
-function recoverState2(ctx, { project, reason }) {
-  validateProjectName(project);
-  return recoverState(sessionStatePath(ctx, project), project, reason);
-}
-
-// plugin/mcp/apex/src/core/index.mjs
-var SOURCE_APEX_ROOT = path6.resolve(path6.dirname(fileURLToPath2(__apexBundleUrl)), "../../../../..");
-function createContext({ workspace, apexRoot = SOURCE_APEX_ROOT } = {}) {
-  if (typeof workspace !== "string" || !workspace.trim()) {
-    throw invalidInput("workspace is required: the absolute path of the project folder that holds agent-output/");
-  }
-  if (!path6.isAbsolute(workspace)) {
-    throw invalidInput(`workspace must be an absolute path (got ${JSON.stringify(workspace)})`, {
-      remediation: "Pass the full path of the folder the session is working in."
-    });
-  }
-  let real;
-  try {
-    real = fs6.realpathSync.native(workspace);
-  } catch {
-    throw invalidInput(`workspace does not exist: ${workspace}`);
-  }
-  if (!fs6.statSync(real).isDirectory()) throw invalidInput(`workspace is not a folder: ${workspace}`);
-  return { workspace: real, apexRoot: path6.resolve(apexRoot) };
-}
-
-// plugin/mcp/apex/src/tools/common.mjs
-var import_ajv2 = __toESM(require_ajv2(), 1);
-var SERVER_VERSION = "0.1.0";
-var MAX_RESULT_BYTES = 20 * 1024;
-var ajv = new import_ajv2.default({ allErrors: true, strict: false, useDefaults: true });
-var WORKSPACE = {
-  type: "string",
-  description: "Absolute path of the project folder (the one that holds agent-output/). Required unless the host sets COPILOT_PROJECT_DIR."
-};
-var PROJECT = { type: "string", description: "Project name (folder under agent-output/)." };
-var STEP = {
-  type: "string",
-  enum: ["1", "2", "3", "3_5", "4", "5", "6", "7"],
-  description: "Workflow step key."
-};
-var NULLABLE_STRING = { anyOf: [{ type: "string" }, { type: "null" }] };
-var STRING_ARRAY = { type: "array", items: { type: "string" } };
-var OPEN_OBJECT = { type: "object", additionalProperties: true };
-function outputSchema(properties, required2 = [], { additionalProperties = false } = {}) {
-  return {
-    type: "object",
-    properties: { ...properties, truncated: { type: "boolean" } },
-    required: required2,
-    additionalProperties
-  };
-}
-var PAGED_RESULT = {
-  total: { type: "integer", minimum: 0 },
-  items: { type: "array", items: true },
-  next_cursor: NULLABLE_STRING
-};
-function objectSchema(properties, required2 = []) {
-  return { type: "object", properties: { workspace: WORKSPACE, ...properties }, required: required2, additionalProperties: false };
-}
-function validateArgs(tool, args) {
-  tool.validate ??= ajv.compile(tool.inputSchema);
-  const input = structuredClone(args ?? {});
-  if (!tool.validate(input)) {
-    const problems = tool.validate.errors.map((error2) => `${error2.instancePath || "/"} ${error2.message}`);
-    throw new ApexError("INVALID_INPUT", `Invalid arguments for ${tool.name}: ${problems.join("; ")}`, {
-      remediation: "Fix the listed arguments and call the tool again."
-    });
-  }
-  return input;
-}
-function compileOutput(tool) {
-  if (!tool.outputSchema || tool.outputSchema.type !== "object") {
-    throw new Error(`Tool ${tool.name} must declare an object outputSchema`);
-  }
-  tool.validateOutput ??= ajv.compile(tool.outputSchema);
-  return tool.validateOutput;
-}
-function assertToolOutputSchemas(tools) {
-  for (const tool of tools) compileOutput(tool);
-}
-function validateResult(tool, result) {
-  const validate2 = compileOutput(tool);
-  if (!validate2(result)) {
-    throw new ApexError(
-      "INTERNAL_ERROR",
-      `Tool ${tool.name} returned a result that does not match its output schema.`,
-      {
-        remediation: "Report this with the server log; no state was changed unless the result said so."
-      }
-    );
-  }
-  return result;
-}
-function contextFor(args, env) {
-  const workspace = args.workspace ?? env.projectDir ?? void 0;
-  return createContext({ workspace, apexRoot: env.apexRoot });
-}
-var byteLength = (value) => Buffer.byteLength(JSON.stringify(value), "utf8");
-function capResult(result) {
-  if (byteLength(result) <= MAX_RESULT_BYTES) return result;
-  const copy = structuredClone(result);
-  const shrink = (node2) => {
-    let changed = false;
-    if (Array.isArray(node2)) {
-      if (node2.length > 1) {
-        node2.splice(Math.ceil(node2.length / 2));
-        changed = true;
-      }
-      for (const item of node2) changed = shrink(item) || changed;
-    } else if (node2 && typeof node2 === "object") {
-      for (const [key, value] of Object.entries(node2)) {
-        if (typeof value === "string" && value.length > 500) {
-          node2[key] = `${value.slice(0, 500)}\u2026`;
-          changed = true;
-        } else changed = shrink(value) || changed;
-      }
-    }
-    return changed;
-  };
-  while (byteLength(copy) > MAX_RESULT_BYTES - 64 && shrink(copy)) ;
-  copy.truncated = true;
-  return copy;
-}
-
 // plugin/mcp/apex/src/tools/assets.mjs
-import fs7 from "node:fs";
-import path7 from "node:path";
 var GRAPH_PATH = ".github/skills/apex-workflow-engine/templates/workflow-graph.json";
 var HARNESS_COMPAT_PATH = "tools/registry/harness-compat.json";
 var AGENTS_INDEX = "agents.json";
@@ -33571,21 +33559,15 @@ function buildCheckpoint({ project, show: show2, graph, agents, compat, readArti
     const agent = agents.find((a) => a.frontmatter?.name === agentName);
     if (!agent) return { owner: null, problem: `owner agent "${agentName}" not found` };
     const fm = agent.frontmatter;
-    const label = Array.isArray(fm.model) ? fm.model[0] : fm.model;
-    const model = compat.models?.[label];
     const tools = Array.isArray(fm.tools) ? fm.tools : [];
     const sdkTools = [...new Set(tools.flatMap((t) => compat.tools?.[t]?.sdk ?? []))];
     const owner2 = {
       agent: agentName,
       file: agent.path,
-      model_label: label ?? null,
-      sdk_model: model?.sdk_id ?? null,
-      reasoning_effort: fm["reasoning-effort"] ?? null,
       tools,
       sdk_tools: sdkTools,
       workers: Array.isArray(fm.agents) ? fm.agents : []
     };
-    if (!model?.sdk_id) return { owner: owner2, problem: `model "${label}" has no runtime mapping; fail closed` };
     const unmapped = tools.filter((t) => !compat.tools?.[t]);
     if (unmapped.length) return { owner: owner2, problem: `tools without mapping: ${unmapped.join(", ")}` };
     return { owner: owner2, problem: null };
@@ -33701,7 +33683,7 @@ function buildCheckpoint({ project, show: show2, graph, agents, compat, readArti
   const { owner, problem: problem3 } = ownerFor(primary.agent);
   checkpoint3.owner = owner;
   if (problem3) {
-    block(problem3, "Fix the owner profile or tools/registry/harness-compat.json; never substitute a model.");
+    block(problem3, "Fix the owner profile or tools/registry/harness-compat.json before continuing.");
     return finalize2(checkpoint3, generatedAt);
   }
   if (status2 === "failed") {
@@ -33832,8 +33814,7 @@ var REVIEW_AUDIT_ENTRY = outputSchema(
     passes_planned: { type: "integer", minimum: 0 },
     passes_executed: { type: "integer", minimum: 0 },
     skipped: { type: "array", items: { type: "integer" } },
-    skip_reasons: STRING_ARRAY,
-    models_used: STRING_ARRAY
+    skip_reasons: STRING_ARRAY
   },
   []
 );
@@ -34148,14 +34129,13 @@ var transition2 = writeTool(
 var reviewAudit2 = writeTool(
   "reviewAudit",
   "Record review audit",
-  "Record review passes, models and skips for a step, or a review attempt (attemptId, attemptKind, inputDigest, attemptOutcome).",
+  "Record review passes and skips for a step, or a review attempt (attemptId, attemptKind, inputDigest, attemptOutcome).",
   {
     project: PROJECT,
     step: STEP,
     complexity: { type: "string" },
     passesPlanned: { type: "integer", minimum: 0 },
     passesExecuted: { type: "integer", minimum: 0 },
-    models: { type: "array", items: { type: "string" } },
     skips: { type: "array", items: { type: "string" } },
     skipReasons: { type: "array", items: { type: "string" } },
     attemptId: { type: "string" },

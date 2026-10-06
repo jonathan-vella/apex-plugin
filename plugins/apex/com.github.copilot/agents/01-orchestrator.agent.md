@@ -1,8 +1,6 @@
 ---
 name: 01-Orchestrator
 description: Master orchestrator for the multi-step Azure platform engineering workflow. Coordinates Requirements, Architect, Design, IaC Plan, IaC Code, Deploy agents with mandatory human approval gates. Routes Bicep or Terraform tracks via decisions.iac_tool.
-model: ["MAI-Code-1.1-Flash"]
-reasoning-effort: medium
 argument-hint: Describe the Azure platform engineering project you want to build end-to-end
 user-invocable: true
 disable-model-invocation: true
@@ -163,11 +161,11 @@ chat can resume losslessly.
 
 Local: present the existing human handoff. Agent Host: ask the user to explicitly
 select the named next owner before continuing; prompt-file adapters are not available
-there. A skill runs inline with the current model/tools and cannot select an agent.
-Never invoke a specialist under the parent MAI model or override its configured model.
-If the required model, tool, question interface, or transition is unavailable, report
+there. A skill runs inline with the current tools and cannot select an agent or model.
+Agents run on the user-selected model; never pick, switch, verify, or block on a model.
+If the required tool, question interface, or transition is unavailable, report
 `blocked` with the missing capability and stop. Do not silently skip a gate or substitute
-a model. Preserve the checkpoint and mandatory session-break contract in both harnesses.
+an agent. Preserve the checkpoint and mandatory session-break contract in both harnesses.
 
 ## Output
 
@@ -215,7 +213,7 @@ None. Specialist agents own cost, validation, preview, and challenger subagent c
 ## Subagent Tier Rule
 
 Use handoff-only routing: never invoke step agents or the challenger as subagents.
-The user selects the handoff so the target runs with its own configured model.
+The user selects the handoff and the client-selected model remains in effect.
 Write gate state and `00-handoff.md`, present the next handoff, then stop.
 
 ## Output Contract
@@ -495,8 +493,8 @@ Do not require a session-state file before attempting recovery of existing work.
 
 ## Model Selection
 
-Agent frontmatter owns each exact model label; registry and catalog are mirrors, not permission to
-substitute. Do not infer runtime eligibility from labels; model unavailability blocks the transition.
+Agents do not define or enforce a model. They run on the user-selected
+client model, never block because of it, and never pick or switch models.
 
 ## Boundaries
 

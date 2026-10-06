@@ -3,7 +3,16 @@
 Each release of the `apex` plugin needs an entry here; `npm run publish:plugin` refuses to publish a version without
 one, and clients only update when the version changes.
 
-## [0.10.1] - Unreleased
+## [0.10.2] - Unreleased
+
+Agents run on the model you select.
+
+- Agents and prompts no longer set `model` or `reasoning-effort`, and never refuse or stop because of the session
+  model (Auto, HydraFusion or a specific model). In 0.10.1, `01-Orchestrator` refused to start a project under Auto.
+- `validate:plugin` and `validate:agents` reject `model`, `reasoning-effort` and `handoffs[].model` in agents and
+  prompts.
+
+## [0.10.1] - 2026-10-05
 
 Fix for the first VS Code pilot run, where no questions were asked.
 

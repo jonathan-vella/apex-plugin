@@ -10,18 +10,15 @@ Applies today to [`03-architect`](../../../agents/03-architect.agent.md)
 (as-built costs). Any future agent that surfaces Azure pricing in a
 user-facing artifact MUST read this file before invocation.
 
-## Model And Harness Contract
+## Harness Contract
 
-Agent frontmatter owns assignments; this is a current routing summary, not an override:
-`03-Architect` uses `Claude Opus 5.5 (copilot)`, `08-As-Built` uses `Claude Sonnet 5.5 (copilot)`, and
-`cost-estimate-subagent` uses `GPT-6 Luna (copilot)`. Keep the independently required
-cost-feasibility review with `apex/reviewRequest` and the built-in `rubber-duck` reviewer.
-These labels do not establish runtime cost-tier eligibility, model availability,
-or API parameters. Do not infer effort settings or pricing from their names.
-If the active harness cannot invoke the declared worker, STOP and notify the user;
-never substitute models, a nested main-agent wrapper, or parent-authored prices.
-Local prompt metadata is not an Agent Host routing contract; skills inherit caller
-model/tools and require explicit selection of the owning agent.
+`cost-estimate-subagent` runs on the model selected by the user in the client.
+Keep the independently required cost-feasibility review with `apex/reviewRequest`
+and the built-in `rubber-duck` reviewer. If the active harness cannot invoke the
+declared worker, STOP and notify the user; never substitute a nested main-agent
+wrapper or parent-authored prices. Local prompt metadata is not an Agent Host
+routing contract; skills inherit the caller's selected model and tools and
+require explicit selection of the owning agent.
 
 ---
 

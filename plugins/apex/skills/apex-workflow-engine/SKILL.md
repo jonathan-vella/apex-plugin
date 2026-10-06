@@ -80,7 +80,7 @@ Operational Local and Host entrypoints share
 read [execution-subagent.md](references/execution-subagent.md).
 Manual Host workflow entry uses
 [apex-host-workflow-start](../apex-host-workflow-start/SKILL.md), including
-`resume [project]`. This skill requires explicit owner selection; it does not bind models/tools.
+`resume [project]`. This skill requires explicit owner selection; it does not bind tools.
 
 Other retained Local operations load only their requested procedure:
 [imported IaC](references/review-imported-iac.md),
@@ -103,7 +103,7 @@ For their shared execution boundary, read
 ## Checkpoint View
 
 `npm run workflow:checkpoint -- <project>` prints a read-only `workflow-checkpoint-v1`
-projection of `apex` state onto this graph: next owner, exact model and tools,
+projection of `apex` state onto this graph: next owner, required tools,
 inputs, outputs, review evidence, gate status and allowed actions. It replaces handoff
 buttons as the routing signal and never writes state. `--verify <file>` rejects a stale
 or edited checkpoint (exit 2); `--owner "<agent>"` rejects an owner not allowed to act

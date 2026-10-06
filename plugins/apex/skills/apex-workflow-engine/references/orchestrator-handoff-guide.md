@@ -156,9 +156,9 @@ Header: `# {Project} — Handoff (Step {N} complete)` with metadata line (`Updat
 All production main agents, including `10-Challenger`, are human-selected
 entry points with `disable-model-invocation: true`. The Orchestrator uses
 human handoffs only (`agents: []`), never nested main-agent dispatch.
-Frontmatter owns model assignments; names and catalog tiers do not establish
-runtime cost-tier eligibility. Unknown or unsupported routing requires STOP,
-not automatic model fallback. Local and Agent Host support need separate verification.
+Agents run on the user-selected model; frontmatter does not assign models.
+Unknown or unsupported owner/tool routing requires STOP, not automatic fallback.
+Local and Agent Host support need separate verification.
 
 ### Step → Handoff Button (orchestrator → step agent)
 

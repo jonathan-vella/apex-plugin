@@ -15,7 +15,7 @@
  *   reviews) or `"1.1"` (rubber-duck reviews bound to a hook-captured
  *   transcript, backlog BL-27). Schema 1.1 adds `reviewer`, `transcript`
  *   and `review_request`; its `cache_inputs` carry `reviewer` instead of
- *   `subagent_sha`/`model`. With --verify-cache, 1.1 reviews are checked
+ *   `subagent_sha`. With --verify-cache, 1.1 reviews are checked
  *   against the signed request, signed transcript metadata and the
  *   transcript itself (tools/scripts/_lib/review-transcript.mjs).
  * - Each `findings[]` element must carry `id`, `severity`, `category`,
@@ -23,7 +23,7 @@
  *   `must_fix` findings must also carry a `suggested_fix` with at minimum
  *   `artifact_path` and `proposed_edit`.
  * - `cache_inputs` must carry `artifact_sha`, `checklists_sha`,
- *   `protocol_sha`, `subagent_sha`, `model`, `artifact_hash` (all
+ *   `protocol_sha`, `subagent_sha`, `artifact_hash` (all
  *   non-empty strings).
  *
  * Excludes the decisions sidecar (`challenge-findings-*-decisions.json`)
@@ -47,7 +47,6 @@ import { parseArgs } from "node:util";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Reporter } from "./_lib/reporter.mjs";
-import { parseFrontmatter } from "./_lib/parse-frontmatter.mjs";
 import { REVIEWER, reviewKey, verifyTranscriptReview } from "./_lib/review-transcript.mjs";
 
 const ROOT = "agent-output";
@@ -74,14 +73,7 @@ const REQUIRED_FINDING_FIELDS = [
   "artifact_section",
   "traces_to",
 ];
-const REQUIRED_CACHE_FIELDS = [
-  "artifact_sha",
-  "checklists_sha",
-  "protocol_sha",
-  "subagent_sha",
-  "model",
-  "artifact_hash",
-];
+const REQUIRED_CACHE_FIELDS = ["artifact_sha", "checklists_sha", "protocol_sha", "subagent_sha", "artifact_hash"];
 // Schema 1.1: rubber-duck reviews bound to a hook-captured transcript (backlog BL-27).
 const REQUIRED_CACHE_FIELDS_V11 = ["artifact_sha", "checklists_sha", "protocol_sha", "reviewer", "artifact_hash"];
 const SUPPORTED_SCHEMAS = new Set(["1.0", "1.1"]);
@@ -145,15 +137,11 @@ export function cacheInputs(artifactPath, root = process.cwd(), guidanceRoot = r
     );
   }
   const worker = read(WORKER_GUIDANCE);
-  const models = parseFrontmatter(worker.toString("utf8"))?.model;
-  const model = Array.isArray(models) ? models[0] : null;
-  if (typeof model !== "string" || !model) throw new Error("Missing reviewer frontmatter model");
   const inputs = {
     artifact_sha: artifactShaValue,
     checklists_sha: hash(read(CHECKLISTS_GUIDANCE)),
     protocol_sha: hash(read(PROTOCOL_GUIDANCE)),
     subagent_sha: hash(worker),
-    model,
   };
   return { ...inputs, artifact_hash: hash(Object.values(inputs).join("\n---\n")) };
 }
@@ -375,7 +363,7 @@ export function runValidator(args = process.argv.slice(2)) {
       console.log(
         "Usage: validate-challenger-findings.mjs [--root DIR | --path FILE | FILE ...] [--verify-cache]\n" +
           "Read-only metadata: --metadata ARTIFACT [--supporting-input PATH ...] [--finding-ids DRAFT.json.tmp]\n" +
-          "Metadata hashes file bytes or sorted directory entries using the reviewer frontmatter model.\n" +
+          "Metadata hashes file bytes or sorted directory entries using reviewer and protocol artifacts.\n" +
           "Use --verify-cache for current review gates, not historical schema-only scans.",
       );
       return 0;

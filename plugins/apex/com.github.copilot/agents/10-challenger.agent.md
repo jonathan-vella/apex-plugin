@@ -1,8 +1,6 @@
 ---
 name: "10-Challenger"
 description: "Standalone adversarial review entry point. Runs gated reviews through apex/reviewRequest, rubber-duck, and apex/recordReview, or ungated rubber-duck reviews inline, then runs the Per-Finding Decision Protocol."
-model: ["Claude Opus 5.5 (copilot)"]
-reasoning-effort: high
 argument-hint: "Provide the path to the artifact to challenge (e.g. agent-output/my-project/04-implementation-plan.md)"
 user-invocable: true
 disable-model-invocation: true
@@ -94,7 +92,7 @@ Done when:
   affected review/approval evidence; the caller must resolve required re-review before advancement.
 - Local uses human handoffs; Host requires explicit selection of the named next owner.
   This main agent is human-selected only, including fallback entry. Skills run inline
-  and cannot choose model/tools. Use the worker tool only for `rubber-duck` review calls.
+  and cannot choose tools or models. Use the worker tool only for `rubber-duck` review calls.
   Tool names here are capabilities; per-harness mappings live in
   [`harness-compat.json`](../../tools/registry/harness-compat.json).
 - Use the artifact_type and review_focus lookup tables below.
